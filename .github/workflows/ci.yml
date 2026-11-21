@@ -18,7 +18,8 @@ jobs:
       ui-dirs: ''
       node: true
       closure-check: true
-      image-test: false
+      image-test: true
+      start-smoke: true
       arm64: false
       helm-chart: 'helm/pragmatic-env-server'
     secrets:
