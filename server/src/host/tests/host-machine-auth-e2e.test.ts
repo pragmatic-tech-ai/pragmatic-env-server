@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net'
 import type { TLSSocket } from 'node:tls'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { X509Certificate, createHash, randomBytes } from 'node:crypto'
 import { Realm, RealmKind } from '@pragmatic-tech-ai/pragmatic-identity'
 import { FakeStorage } from '@pragmatic-tech-ai/todl-runtime'
@@ -20,7 +20,7 @@ import type { EnvironmentProvisioning } from '../../environments/environment-pro
 
 class MachineFixture
 {
-    private static readonly Dir = 'src/tests/fixtures/tls/'
+    private static readonly Dir = join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'tls') + sep
     public static readonly ServerRef: MachineTlsRef = { certFile: `${MachineFixture.Dir}server.pem`, keyFile: `${MachineFixture.Dir}server.key`, caFile: `${MachineFixture.Dir}ca.pem` }
     private static readonly ClientCert = `${MachineFixture.Dir}machine-client.pem`
     private static readonly ClientKey = `${MachineFixture.Dir}machine-client.key`

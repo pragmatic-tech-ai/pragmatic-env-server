@@ -14,6 +14,11 @@ The master key is required and is supplied at install time. It is never committe
 
     helm upgrade pragmatic ./helm/pragmatic-env-server --reuse-values
 
+The chart runs images built by this repository (0.1.0 and later): their code sits under `server/dist`, so the worker
+StatefulSet runs `node server/dist/bin/pragmatic-workerd.js`. Pre-split images (`0.1.0-early.N`, built by
+pragmatic-server, code under `dist`) need pragmatic-server's chart. The gateway image is released by
+pragmatic-env-gateway with its own version: set `image.gatewayTag` when it differs from `image.tag`.
+
 Environments are configured through the `environments` value (rendered to `environments.json` in a ConfigMap). `environments` is the environment map (the body under the `environments` key; the chart wraps it), e.g. `environments: { acme: { displayName: Acme } }`. Put secret references there, never secret values.
 
 Per-environment secrets (OIDC client secrets, bootstrap-admin passwords) are supplied through a single Kubernetes Secret and mounted at `/run/secrets/provisioned/secrets.json` (the server reads it via `PRAGMATIC_PROVISIONED_SECRETS_FILE` and writes each environment's named refs into its encrypted store at build time). Provide them chart-managed via `secrets.provisioned` (a map of the ref strings used in `environments` to their values -- dev convenience only, never commit real values) or out-of-band via `secrets.provisionedExistingSecret` (+ `secrets.provisionedSecretKey`, default `provisioned-secrets.json`). An environment that names a ref with no matching value fails that environment closed. Rotating an out-of-band `provisionedExistingSecret` does not automatically roll the pod (the `checksum/secret` annotation covers only the chart-managed Secret); restart the deployment after rotating it. The server reads the file only at environment build time.

@@ -7,3 +7,7 @@
 **/dist
 **/*.tsbuildinfo
 test-results
+# Local dev secrets the compose files mount: never in the build context.
+docker/master.key
+docker/*.key
+docker/tls

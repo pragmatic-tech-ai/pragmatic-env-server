@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { X509Certificate, createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { AuthMethod, AuthenticatedResult, Credential, DelegationDepth, IdentityConfig, PresentedSecret, PrincipalKind, Realm, RealmKind } from '@pragmatic-tech-ai/pragmatic-identity'
 import { InMemoryOidcFlowStateStore } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
 import { FakeOidcHttpClient, FakeOidcIdp } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc/testing'
@@ -11,7 +12,7 @@ import { ResolverFixture } from './resolver-fixture.js'
 
 class MachineHarness
 {
-    public static readonly CertPath = 'src/tests/fixtures/tls/machine-client.pem'
+    public static readonly CertPath = join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'tls', 'machine-client.pem')
     public static readonly PrincipalId = 'svc-1'
     public static readonly LocalPackId = 'local'
     public static readonly EntraPackId = 'entra'

@@ -12,8 +12,10 @@ Seeded from pragmatic-server@2a2e8138 (dev-kit A3 Task 9); the map is [ARCHITECT
   the todl-identity-engine and todl-connectors-host repositories), built and tested here, not published.
 - `helm/pragmatic-env-server` — the Kubernetes chart (chart name `pragmatic-server`, unchanged).
 - `Dockerfile`, `docker-bake.hcl`, `closure.json`, `.github/workflows/` — rendered by `pragmatic-container-template`
-  (`@pragmatic-tech-ai/pragmatic-release-toolkit`). `docker/` and `docker-compose.yml` hold the legacy
-  sibling-workspace build, kept as they were.
+  (`@pragmatic-tech-ai/pragmatic-release-toolkit`): the image of record.
+- `docker/Dockerfile`, `docker/docker-compose.cluster.yml` and `docker-compose.yml` are the legacy pre-split build,
+  kept as they were for reference: they build an archived pragmatic-server checkout from its parent folder, **not this
+  repository** (`docker/README.md`, `docker/compose-README.md`).
 
 ## Build and test
 

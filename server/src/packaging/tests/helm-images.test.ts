@@ -40,3 +40,16 @@ test('every workload wires image.pullSecrets into imagePullSecrets, rendering no
         assert.ok(spec !== -1 && spec < text.indexOf('containers:'), `${workload}: the pull secrets sit in the pod spec, before the containers`)
     }
 })
+
+class GatewayTag
+{
+    public static readonly Image = /image: "\{\{ \.Values\.image\.gatewayRepository \| default \.Values\.image\.repository \}\}:\{\{ \.Values\.image\.gatewayTag \| default \.Values\.image\.tag \| default \.Chart\.AppVersion \}\}"/
+    public static readonly Deployment = 'gateway-deployment.yaml'
+}
+
+test('the gateway takes its own image.gatewayTag, falling back to image.tag and then appVersion', () =>
+{
+    const values = parse(ImageChart.Text('values.yaml')) as { image: { gatewayTag: string } }
+    assert.equal(values.image.gatewayTag, '')
+    assert.match(ImageChart.Text('templates', GatewayTag.Deployment), GatewayTag.Image)
+})

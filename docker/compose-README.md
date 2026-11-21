@@ -1,6 +1,6 @@
 # Local dev with docker compose
 
-`docker-compose.yml` (in the `pragmatic-server` root) runs the server for local development. The build context is the parent workspace directory, so private sibling packages resolve; the Dockerfile needs the BuildKit secret `npmrc` for private dependencies.
+**Legacy:** `docker-compose.yml` and `docker/docker-compose.cluster.yml` build `pragmatic-server/docker/Dockerfile` from the parent folder of a pragmatic-server checkout (archived; the pre-split sibling workspace), not from this repository: they are kept as they were for reference. They run the server for local development; the Dockerfile needs the BuildKit secret `npmrc` for private dependencies. To run this repository's image, use `ghcr.io/pragmatic-tech-ai/pragmatic-env-server` (or the image the root `docker-bake.hcl` builds) with the same environment and mounts; its worker command is `node server/dist/bin/pragmatic-workerd.js`.
 
 ## 1. Generate a dev master key
 

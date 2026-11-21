@@ -4,8 +4,9 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 /**
- * The packages that must be installed exactly once: TODL, todl-runtime, Mural and pragmatic-graph classes are checked
- * with `instanceof` across packages, so a second copy anywhere in the install (a nested node_modules) breaks them.
+ * The packages that must be installed exactly once: TODL, todl-runtime, Mural, pragmatic-graph and pragmatic-protocol
+ * classes are checked with `instanceof` across packages, and the OpenTelemetry API keeps one global registry per process,
+ * so a second copy anywhere in the install (a nested node_modules) breaks them.
  */
 class InstalledCopies
 {
@@ -14,6 +15,8 @@ class InstalledCopies
         '@pragmatic-tech-ai/todl-runtime',
         '@pragmatic-tech-ai/mural',
         '@pragmatic-tech-ai/pragmatic-graph',
+        '@pragmatic-tech-ai/pragmatic-protocol',
+        '@opentelemetry/api',
     ]
     public static readonly RepoRoot = join(import.meta.dirname, '..', '..', '..')
     private static readonly NodeModules = 'node_modules'

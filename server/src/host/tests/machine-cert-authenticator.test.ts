@@ -2,13 +2,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { X509Certificate, createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { AuthMethod, AuthenticatedResult, Credential, PresentedSecret, PrincipalKind, RejectedResult, Realm, RealmKind } from '@pragmatic-tech-ai/pragmatic-identity'
 import { MachineCertIdentity, MachinePrincipalMap } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { MachineCertAuthenticator } from '../machine-cert-authenticator.js'
 
 class Fixture
 {
-    private static readonly CertPath = 'src/tests/fixtures/tls/machine-client.pem'
+    public static readonly CertPath = join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'tls', 'machine-client.pem')
     public static Fingerprint(): string
     {
         const der = new X509Certificate(readFileSync(Fixture.CertPath)).raw
@@ -46,7 +47,7 @@ test('an empty fingerprint is rejected', async () =>
 
 test('FromPeerCertificate converges raw DER and colon-separated uppercase fingerprint256', () =>
 {
-    const raw = new X509Certificate(readFileSync('src/tests/fixtures/tls/machine-client.pem')).raw
+    const raw = new X509Certificate(readFileSync(Fixture.CertPath)).raw
     const hex = createHash('sha256').update(raw).digest('hex')
     const colon = hex.toUpperCase().match(/../g)!.join(':')
     const both = MachineCertIdentity.FromPeerCertificate(true, { fingerprint256: colon, raw })

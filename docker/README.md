@@ -1,6 +1,6 @@
 # pragmatic-server container image (legacy sibling-workspace build)
 
-The image of record is the repository root `Dockerfile` (rendered by pragmatic-container-template, built by CI from published packages; see the root README). This folder keeps the pre-split build as it was: it builds the whole sibling workspace from source (hermetic, multi-stage). The build context must be the parent workspace directory (`architecture-agent/`), which holds all sibling packages.
+The image of record is the repository root `Dockerfile` (rendered by pragmatic-container-template, built by CI from published packages; see the root README). This folder keeps the pre-split build as it was, and **it does not build this repository**: it needs the parent folder of an (archived) pragmatic-server checkout with all its siblings, and builds the whole sibling workspace from source (hermetic, multi-stage). The build context must be the parent workspace directory (`architecture-agent/`), which holds all sibling packages.
 
 ## Build
 
