@@ -1,0 +1,72 @@
+import { createHash } from 'node:crypto'
+import type { SourceFile } from '@pragmatic-tech-ai/todl'
+import type { IStorage } from '@pragmatic-tech-ai/todl-runtime'
+
+/**
+ * Collects a member's `.todl` sources from its storage (server analogue of Plexus
+ * collectTodlSources) and hashes them for compare-and-swap concurrency checks.
+ */
+export class TodlSourceCollector
+{
+    private static readonly TodlExtension = '.todl'
+    private static readonly PathSeparator = '/'
+    private static readonly SkippedDirs: readonly string[] = ['dist', 'build', 'out', 'node_modules', '.git']
+    private static readonly HashAlgorithm = 'sha256'
+    private static readonly HashEncoding = 'hex'
+    private static readonly FieldSeparator = '\u0000'
+
+    /** Every `.todl` file under the storage root, excluding build/vendor folders (dist, build, out, node_modules, .git) at any depth. */
+    public async Collect(storage: IStorage): Promise<SourceFile[]>
+    {
+        const out: SourceFile[] = []
+        await this.Walk(storage, '', out)
+        return out
+    }
+
+    /** The language service keys files by absolute URI: the storage root (with a trailing separator) + the storage-relative path. */
+    public static AbsoluteUri(storage: IStorage, uri: string): string
+    {
+        const root = storage.Root
+        return (root.endsWith(TodlSourceCollector.PathSeparator) ? root : root + TodlSourceCollector.PathSeparator) + uri
+    }
+
+    /** A stable hash of the sources (order-independent: sorted by uri). */
+    public SourceHash(sources: readonly SourceFile[]): string
+    {
+        const hash = createHash(TodlSourceCollector.HashAlgorithm)
+        const sorted = [...sources].sort((a, b) => (a.uri < b.uri ? -1 : a.uri > b.uri ? 1 : 0))
+        for (const source of sorted)
+        {
+            hash.update(source.uri)
+            hash.update(TodlSourceCollector.FieldSeparator)
+            hash.update(source.text)
+            hash.update(TodlSourceCollector.FieldSeparator)
+        }
+        return hash.digest(TodlSourceCollector.HashEncoding)
+    }
+
+    /** Whether a storage-relative path is a `.todl` source the collector tracks (right extension, outside the skipped build/vendor folders). */
+    public static IsSourcePath(path: string): boolean
+    {
+        const segments = path.split(TodlSourceCollector.PathSeparator)
+        return path.toLowerCase().endsWith(TodlSourceCollector.TodlExtension)
+            && !segments.slice(0, -1).some(segment => TodlSourceCollector.SkippedDirs.includes(segment))
+    }
+
+    private async Walk(storage: IStorage, dir: string, out: SourceFile[]): Promise<void>
+    {
+        for (const entry of await storage.List(dir))
+        {
+            if (entry.IsDirectory && TodlSourceCollector.SkippedDirs.includes(entry.Name)) continue
+            const path = dir === '' ? entry.Name : dir + TodlSourceCollector.PathSeparator + entry.Name
+            if (entry.IsDirectory)
+            {
+                await this.Walk(storage, path, out)
+            }
+            else if (entry.Name.toLowerCase().endsWith(TodlSourceCollector.TodlExtension))
+            {
+                out.push({ uri: path, text: await storage.ReadText(path) })
+            }
+        }
+    }
+}

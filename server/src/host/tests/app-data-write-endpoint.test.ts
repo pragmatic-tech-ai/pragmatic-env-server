@@ -1,0 +1,153 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { InMemoryMessageSocket, PragmaticClient, AppWriteOpKind, AppWriteStatus } from '@pragmatic-tech-ai/pragmatic-protocol'
+import type { AppWriteOpDto, AppWriteResultDto, AssignResultDto, ListSharesResultDto, ShareResultDto } from '@pragmatic-tech-ai/pragmatic-protocol'
+import type { SolutionLanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
+import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role, ResourceRef, ResourceKind, ResourceAuthorizationPolicy } from '@pragmatic-tech-ai/pragmatic-identity'
+import { PragmaticServer } from '../../pragmatic-server.js'
+import { ServerConnectionHandler } from '../server-connection-handler.js'
+import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
+import type { PragmaticAppsRegistry } from '../apps/pragmatic-apps-registry.js'
+import type { IEnvironmentDataService } from '../environment/environment-data-service.js'
+
+/** A data service whose data/write is the test's stub; the share and assign ops are not used here. */
+class WriteOnlyData implements IEnvironmentDataService
+{
+    private static readonly Unused = 'not used by this test'
+
+    public constructor(private readonly write: (name: string, ops: readonly AppWriteOpDto[]) => Promise<AppWriteResultDto>)
+    {
+    }
+
+    public Write(_context: AccessContext, appName: string, operations: readonly AppWriteOpDto[]): Promise<AppWriteResultDto>
+    {
+        return this.write(appName, operations)
+    }
+
+    public Share(): Promise<ShareResultDto>
+    {
+        return Promise.reject(new Error(WriteOnlyData.Unused))
+    }
+
+    public Unshare(): Promise<ShareResultDto>
+    {
+        return Promise.reject(new Error(WriteOnlyData.Unused))
+    }
+
+    public ListShares(): Promise<ListSharesResultDto>
+    {
+        return Promise.reject(new Error(WriteOnlyData.Unused))
+    }
+
+    public Assign(): Promise<AssignResultDto>
+    {
+        return Promise.reject(new Error(WriteOnlyData.Unused))
+    }
+}
+
+class EndpointFixture
+{
+    private static readonly PackagesPrefix = 'adw-pkgs-'
+    private static readonly NoConnectors = 'no connectors'
+    public static readonly AppName = 'x'
+    private static readonly WidgetConcept = 'shop.Widget'
+    private static readonly WidgetLabel = 'w'
+    public static readonly ServerId = 'srv-1'
+    public static readonly SampleOps: AppWriteOpDto[] = [{ op: AppWriteOpKind.Create, concept: EndpointFixture.WidgetConcept, fields: { label: EndpointFixture.WidgetLabel } }]
+    public static ReceivedName: string | undefined
+    public static ReceivedOps: readonly AppWriteOpDto[] | undefined
+
+    public static Owner(): AccessContext
+    {
+        const realm = new Realm('t1', RealmKind.SelfHosted, 'Environment One')
+        const principal = new Principal('p1', 't1', PrincipalKind.User, new Map(), [])
+        const grants = [new Grant('p1', Role.Owner, new ResourceRef(ResourceKind.Realm, 't1', []))]
+        return new AccessContext(principal, realm, grants, new ResourceAuthorizationPolicy())
+    }
+
+    public static NoGrants(): AccessContext
+    {
+        const realm = new Realm('t1', RealmKind.SelfHosted, 'Environment One')
+        const principal = new Principal('p1', 't1', PrincipalKind.User, new Map(), [])
+        return new AccessContext(principal, realm, [], new ResourceAuthorizationPolicy())
+    }
+
+    public static Applied(): (name: string, ops: readonly AppWriteOpDto[]) => Promise<AppWriteResultDto>
+    {
+        return async (name, ops) =>
+        {
+            EndpointFixture.ReceivedName = name
+            EndpointFixture.ReceivedOps = ops
+            return { results: ops.map(() => ({ status: AppWriteStatus.Applied, id: EndpointFixture.ServerId })) }
+        }
+    }
+
+    public static async With(purpose: EnvironmentPurpose, context: AccessContext, write: (name: string, ops: readonly AppWriteOpDto[]) => Promise<AppWriteResultDto>, body: (client: PragmaticClient) => Promise<void>): Promise<void>
+    {
+        const packages = mkdtempSync(join(tmpdir(), EndpointFixture.PackagesPrefix))
+        const server = new PragmaticServer({ packagesRoot: packages })
+        await server.Start()
+        const languageService = await server.LanguageService()
+        const manager = await server.Manager()
+        const [serverSocket, clientSocket] = InMemoryMessageSocket.Pair()
+        const runtime = purpose === EnvironmentPurpose.Runtime
+        const applications = { List: async () => [], LiveApplicationFor: async (name: string) => ({ Manifest: { name, version: '1.0.0' } }) } as unknown as PragmaticAppsRegistry
+        const handler = ServerConnectionHandler.Attach(serverSocket, languageService, manager, context, undefined, server.DevCypher(), undefined, undefined, undefined, undefined, undefined, undefined, purpose, runtime ? applications : undefined, runtime ? new WriteOnlyData(write) : undefined)
+        const client = PragmaticClient.CreateOverSocket(clientSocket)
+        try
+        {
+            await body(client)
+        }
+        finally
+        {
+            await client.DisposeAsync()
+            handler.Dispose()
+            await (languageService as SolutionLanguageService).WhenIdle()
+            await server.Dispose()
+            rmSync(packages, { recursive: true, force: true })
+        }
+    }
+}
+
+test('data/write on a development environment is rejected', async () =>
+{
+    await EndpointFixture.With(EnvironmentPurpose.Development, EndpointFixture.Owner(), EndpointFixture.Applied(), async client =>
+    {
+        await assert.rejects(() => client.WriteAppData({ operations: EndpointFixture.SampleOps }), /runtime/i)
+    })
+})
+
+test('data/write before application/open is rejected', async () =>
+{
+    await EndpointFixture.With(EnvironmentPurpose.Runtime, EndpointFixture.Owner(), EndpointFixture.Applied(), async client =>
+    {
+        await assert.rejects(() => client.WriteAppData({ operations: EndpointFixture.SampleOps }), /no application selected/i)
+    })
+})
+
+test('a principal without Write is rejected by the policy gate', async () =>
+{
+    EndpointFixture.ReceivedOps = undefined
+    await EndpointFixture.With(EnvironmentPurpose.Runtime, EndpointFixture.NoGrants(), EndpointFixture.Applied(), async client =>
+    {
+        await assert.rejects(() => client.WriteAppData({ operations: EndpointFixture.SampleOps }), (e: unknown) => !/no application selected/i.test(String((e as { message?: string }).message ?? e)))
+        assert.equal(EndpointFixture.ReceivedOps, undefined)
+    })
+})
+
+test('runtime environment routes an opened app write to the provider', async () =>
+{
+    await EndpointFixture.With(EnvironmentPurpose.Runtime, EndpointFixture.Owner(), EndpointFixture.Applied(), async client =>
+    {
+        await client.OpenApplication(EndpointFixture.AppName)
+        const out = await client.WriteAppData({ operations: EndpointFixture.SampleOps })
+        assert.equal(out.results[0].status, AppWriteStatus.Applied)
+        assert.equal(out.results[0].id, EndpointFixture.ServerId)
+        assert.equal(EndpointFixture.ReceivedName, EndpointFixture.AppName)
+        assert.equal(EndpointFixture.ReceivedOps?.length, 1)
+        assert.equal(EndpointFixture.ReceivedOps?.[0].concept, EndpointFixture.SampleOps[0].concept)
+    })
+})

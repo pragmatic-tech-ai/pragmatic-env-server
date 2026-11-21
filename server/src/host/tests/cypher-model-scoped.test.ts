@@ -1,0 +1,287 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, cpSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { InMemoryMessageSocket, PragmaticClient, ErrorCodes, CursorStaleError, PageCursorCodec } from '@pragmatic-tech-ai/pragmatic-protocol'
+import type { CypherQueryParams, CypherQueryPageDto } from '@pragmatic-tech-ai/pragmatic-protocol'
+import { Cypher } from '@pragmatic-tech-ai/pragmatic-graph'
+import { toJSON, ModelShardExtractor } from '@pragmatic-tech-ai/todl'
+import type { SolutionLanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
+import type { SolutionManagerService } from '@pragmatic-tech-ai/todl'
+import type { AccessContext, ISecurityModelConfig } from '@pragmatic-tech-ai/pragmatic-identity'
+import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
+import { PragmaticServer } from '../../pragmatic-server.js'
+import { ServerConnectionHandler } from '../server-connection-handler.js'
+import { PageFingerprint } from '../paging/page-request.js'
+import { CypherParamConverter } from '../cypher/cypher-param-converter.js'
+import { PpSecurityHarness } from '../cypher/tests/pp-security-harness.js'
+
+/** One open solution holding three models (A, B, C), served through real handlers for chosen principals. */
+class ModelScopedWorld
+{
+    public readonly ModelIds: readonly string[]
+    private readonly server: PragmaticServer
+    private readonly language: SolutionLanguageService
+    private readonly manager: SolutionManagerService
+    private readonly handlers: ServerConnectionHandler[] = []
+    private readonly clients: PragmaticClient[] = []
+
+    public constructor(server: PragmaticServer, language: SolutionLanguageService, manager: SolutionManagerService, modelIds: readonly string[])
+    {
+        this.server = server
+        this.language = language
+        this.manager = manager
+        this.ModelIds = modelIds
+    }
+
+    /** The engine part of a cursor fingerprint: the schema version and the caller's scope digest (no commit, S11). */
+    public async EngineState(context: AccessContext): Promise<string[]>
+    {
+        const digest = (await (await this.server.DevScopes()).ScopeFor(context)).Digest
+        return [(await this.server.DevEngine().Engine()).SchemaVersion, digest]
+    }
+
+    public Connect(context: AccessContext): ServerConnectionHandler
+    {
+        const [serverSocket, clientSocket] = InMemoryMessageSocket.Pair()
+        const handler = ServerConnectionHandler.Attach(
+            serverSocket, this.language, this.manager, context, undefined, this.server.DevCypher(),
+            undefined, undefined, undefined, undefined, undefined, undefined, EnvironmentPurpose.Development)
+        this.clients.push(PragmaticClient.CreateOverSocket(clientSocket))
+        this.handlers.push(handler)
+        return handler
+    }
+
+    public async Dispose(): Promise<void>
+    {
+        for (const client of this.clients)
+        {
+            await client.DisposeAsync()
+        }
+        for (const handler of this.handlers)
+        {
+            handler.Dispose()
+        }
+        await this.language.WhenIdle()
+        await this.manager.CloseSolution()
+        await this.server.Dispose()
+    }
+}
+
+class ModelScopedFixture
+{
+    public static readonly NoConnectors = 'no connectors'
+    public static readonly Plain = 'p1'
+    public static readonly Granted = 'p2'
+    public static readonly Unknown = 'no-such-model'
+    public static readonly OtherUnknown = 'another-missing-model'
+    public static readonly Secret = 'hush'
+    public static readonly LabelQuery = 'MATCH (w:Widget) RETURN w.label AS label ORDER BY label'
+    private static readonly SolutionPrefix = 'cms-sol-'
+    private static readonly PackagesPrefix = 'cms-pkgs-'
+    private static readonly IdentityPrefix = 'cms-id-'
+    private static readonly ModelFile = join('models', 'model.todl')
+    private static readonly Namespace = 'acme'
+    private static readonly RootUnitName = 'Root'
+    private static readonly SalesUnitName = 'Sales'
+    private static readonly ExpectedRejection = 'expected rejection'
+
+    /** A: two sales rows + one root row. B: one sales row. C: root rows only. */
+    public static ModelTodl(): string
+    {
+        const bu = PpSecurityHarness.OwningBuField
+        const sales = PpSecurityHarness.SalesBu
+        const root = PpSecurityHarness.RootBu
+        const widget = PpSecurityHarness.Concept
+        const ns = ModelScopedFixture.Namespace
+        const row = (id: string, owner: string, label: string): string => `${widget} ${id} { ${bu} = "${owner}"; label = "${label}"; secret = "${ModelScopedFixture.Secret}"; } `
+        return `namespace ${ns} { concept ${widget} { ${bu} : string?; secret : string?; } `
+            + `model ShopA : ${ns} { ${row('a1', sales, 'alpha')}${row('a2', root, 'beta')}${row('a3', sales, 'alpha2')} } `
+            + `model ShopB : ${ns} { ${row('b1', sales, 'gamma')} } `
+            + `model ShopC : ${ns} { ${row('c1', root, 'delta')} } }`
+    }
+
+    public static Context(principalId: string): AccessContext
+    {
+        return PpSecurityHarness.Context(principalId)
+    }
+
+    /**
+     * A structurally-valid environment setting placing both principals in sales. The dev graph is governed by RBAC at the
+     * PolicyGate only (PR13): the security setting is never read for dev reads, so this only marks identity as configured
+     * for the model-scoping and cursor behaviour the kept tests pin.
+     */
+    public static Model(): ISecurityModelConfig
+    {
+        return {
+            businessUnits: [
+                { id: PpSecurityHarness.RootBu, name: ModelScopedFixture.RootUnitName },
+                { id: PpSecurityHarness.SalesBu, name: ModelScopedFixture.SalesUnitName, parent: PpSecurityHarness.RootBu },
+            ],
+            users: [
+                { principalId: ModelScopedFixture.Plain, businessUnitId: PpSecurityHarness.SalesBu },
+                { principalId: ModelScopedFixture.Granted, businessUnitId: PpSecurityHarness.SalesBu },
+            ],
+            teams: [],
+            roleAssignments: [],
+            profileAssignments: [],
+            roleOverrides: [],
+            profileOverrides: [],
+        }
+    }
+
+    public static async With(identityOn: boolean, body: (world: ModelScopedWorld) => Promise<void>): Promise<void>
+    {
+        const solution = mkdtempSync(join(tmpdir(), ModelScopedFixture.SolutionPrefix))
+        const packages = mkdtempSync(join(tmpdir(), ModelScopedFixture.PackagesPrefix))
+        const identityRoot = mkdtempSync(join(tmpdir(), ModelScopedFixture.IdentityPrefix))
+        cpSync(join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
+        writeFileSync(join(solution, ModelScopedFixture.ModelFile), ModelScopedFixture.ModelTodl())
+        PpSecurityHarness.SetKey()
+        const server = identityOn
+            ? new PragmaticServer({ packagesRoot: packages, identity: PpSecurityHarness.Identity(identityRoot) })
+            : new PragmaticServer({ packagesRoot: packages })
+        await server.Start()
+        await server.OpenSolution(solution)
+        if (identityOn)
+        {
+            await PpSecurityHarness.Seed(server, ModelScopedFixture.Model())
+        }
+        const language = await server.LanguageService() as SolutionLanguageService
+        await language.WhenIdle()
+        const manager = await server.Manager()
+        const member = [...manager.ActiveSolution!.Members].find(m => m.Storage !== undefined)!
+        const view = await language.ModelView(member.Storage!)
+        const ids = ModelShardExtractor.ModelsOf(toJSON(view!.model)).map(m => String(m))
+        const world = new ModelScopedWorld(server, language, manager, ids)
+        try
+        {
+            await body(world)
+        }
+        finally
+        {
+            await world.Dispose()
+            PpSecurityHarness.ClearKey()
+            rmSync(solution, { recursive: true, force: true })
+            rmSync(packages, { recursive: true, force: true })
+            rmSync(identityRoot, { recursive: true, force: true })
+        }
+    }
+
+    public static Params(modelId: string | undefined, cypher: string = ModelScopedFixture.LabelQuery, extra: Partial<CypherQueryParams> = {}): CypherQueryParams
+    {
+        return modelId === undefined ? { cypher, ...extra } : { cypher, modelId, ...extra }
+    }
+
+    public static Text(page: CypherQueryPageDto): string
+    {
+        return JSON.stringify(page.items)
+    }
+
+    public static async CodeOf(attempt: Promise<unknown>): Promise<{ code: number | undefined, message: string }>
+    {
+        try
+        {
+            await attempt
+        }
+        catch (error)
+        {
+            const e = error as { code?: number, message?: string }
+            return { code: e.code, message: e.message ?? '' }
+        }
+        throw new Error(ModelScopedFixture.ExpectedRejection)
+    }
+}
+
+test('the fixture yields three model shards', async () =>
+{
+    await ModelScopedFixture.With(true, async world =>
+    {
+        assert.equal(world.ModelIds.length, 3)
+    })
+})
+
+test('a model-scoped query runs only against the named shard', async () =>
+{
+    await ModelScopedFixture.With(true, async world =>
+    {
+        const handler = world.Connect(ModelScopedFixture.Context(ModelScopedFixture.Plain))
+        const [a, b] = world.ModelIds
+        const inA = ModelScopedFixture.Text(await handler.RunCypherQuery(ModelScopedFixture.Params(a)))
+        const inB = ModelScopedFixture.Text(await handler.RunCypherQuery(ModelScopedFixture.Params(b)))
+        assert.ok(inA.includes('alpha') && inA.includes('alpha2'))
+        assert.ok(!inA.includes('gamma'))
+        assert.ok(inB.includes('gamma'))
+        assert.ok(!inB.includes('alpha'))
+    })
+})
+
+test('an UNKNOWN modelId is InvalidParams', async () =>
+{
+    await ModelScopedFixture.With(true, async world =>
+    {
+        const handler = world.Connect(ModelScopedFixture.Context(ModelScopedFixture.Plain))
+        const error = await ModelScopedFixture.CodeOf(handler.RunCypherQuery(ModelScopedFixture.Params(ModelScopedFixture.Unknown)))
+        assert.equal(error.code, ErrorCodes.InvalidParams)
+    })
+})
+
+test('any non-member modelId is InvalidParams with an identical error', async () =>
+{
+    await ModelScopedFixture.With(true, async world =>
+    {
+        const handler = world.Connect(ModelScopedFixture.Context(ModelScopedFixture.Plain))
+        const first = await ModelScopedFixture.CodeOf(handler.RunCypherQuery(ModelScopedFixture.Params(ModelScopedFixture.Unknown)))
+        const second = await ModelScopedFixture.CodeOf(handler.RunCypherQuery(ModelScopedFixture.Params(ModelScopedFixture.OtherUnknown)))
+        assert.equal(first.code, ErrorCodes.InvalidParams)
+        assert.deepEqual(first, second)
+        assert.ok(!first.message.includes(ModelScopedFixture.Unknown))
+    })
+})
+
+test('a cursor minted for modelId A is stale for modelId B', async () =>
+{
+    await ModelScopedFixture.With(true, async world =>
+    {
+        const handler = world.Connect(ModelScopedFixture.Context(ModelScopedFixture.Plain))
+        const first = await handler.RunCypherQuery(ModelScopedFixture.Params(world.ModelIds[0], ModelScopedFixture.LabelQuery, { pageSize: 1 }))
+        assert.ok(first.nextCursor !== undefined)
+        const second = await handler.RunCypherQuery(ModelScopedFixture.Params(world.ModelIds[0], ModelScopedFixture.LabelQuery, { pageSize: 1, cursor: first.nextCursor }))
+        assert.ok(ModelScopedFixture.Text(second).includes('alpha2'))
+        const stale = await ModelScopedFixture.CodeOf(handler.RunCypherQuery(ModelScopedFixture.Params(world.ModelIds[1], ModelScopedFixture.LabelQuery, { pageSize: 1, cursor: first.nextCursor })))
+        assert.equal(stale.code, CursorStaleError.Code)
+    })
+})
+
+test('no-identity / no-modelId cursor is a keyset cursor over the engine fingerprint', async () =>
+{
+    await ModelScopedFixture.With(false, async world =>
+    {
+        const handler = world.Connect(ModelScopedFixture.Context(ModelScopedFixture.Plain))
+        const page = await handler.RunCypherQuery(ModelScopedFixture.Params(undefined, ModelScopedFixture.LabelQuery, { pageSize: 1 }))
+        const fingerprint = PageFingerprint.Of('cypher', ModelScopedFixture.LabelQuery, CypherParamConverter.Canonical(undefined), ...await world.EngineState(ModelScopedFixture.Context(ModelScopedFixture.Plain)))
+        // a keyset cursor (S11): offset 0, the fingerprint, then the engine's cursor of the page's last row
+        const wire = PageCursorCodec.Decode(page.nextCursor!)!
+        const prefix = `${fingerprint}\u0000`
+        assert.equal(wire.offset, 0)
+        assert.ok(wire.fingerprint.startsWith(prefix))
+        const after = Cypher.CypherCursor.Decode(wire.fingerprint.slice(prefix.length)).After
+        assert.deepEqual(after.map(cell => (cell as Cypher.ScalarValue).Value), [page.items[0]![0]])
+    })
+})
+
+test('cypher/models lists exactly the shard ids model-scoped queries accept', async () =>
+{
+    await ModelScopedFixture.With(true, async world =>
+    {
+        const handler = world.Connect(ModelScopedFixture.Context(ModelScopedFixture.Plain))
+        const listed = (await handler.RunCypherModels()).models
+        assert.deepEqual(listed, [...world.ModelIds].sort())
+        for (const id of listed)
+        {
+            await handler.RunCypherQuery(ModelScopedFixture.Params(id))
+        }
+    })
+})
+

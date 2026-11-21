@@ -1,0 +1,91 @@
+# syntax=docker/dockerfile:1
+# Build context MUST be the parent workspace dir (architecture-agent/).
+# Build:  DOCKER_BUILDKIT=1 docker build -f pragmatic-server/docker/Dockerfile --secret id=npmrc,src=/path/to/.npmrc -t pragmatic-server ..
+FROM node:22 AS builder
+WORKDIR /workspace
+# Native addons (argon2/bcrypt in identity) need a C toolchain.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+
+# Copy each package, then install+build in dependency order.
+COPY pragmatic-graph/ ./pragmatic-graph/
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd pragmatic-graph && npm install --no-audit --no-fund && npm run build
+COPY todl-runtime/ ./todl-runtime/
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd todl-runtime && npm install --no-audit --no-fund && npm run build
+COPY TODL/ ./TODL/
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd TODL && npm install --no-audit --no-fund && npm run build
+COPY Mural/ ./Mural/
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd Mural && npm install --no-audit --no-fund && npm run build
+COPY pragmatic-protocol/ ./pragmatic-protocol/
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd pragmatic-protocol && npm install --no-audit --no-fund && npm run build
+COPY pragmatic-shared/ ./pragmatic-shared/
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd pragmatic-shared && npm install --no-audit --no-fund && npm run build
+COPY todl-identity-engine/ ./todl-identity-engine/
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd todl-identity-engine && npm install --no-audit --no-fund && npm run build
+COPY todl-connectors-host/ ./todl-connectors-host/
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd todl-connectors-host && npm install --no-audit --no-fund && npm run build
+COPY pragmatic-server/ ./pragmatic-server/
+# The siblings' locks pull the engine and todl-runtime from GitHub Packages; re-point them at the siblings before the
+# server builds so the image holds ONE of each (the server itself links both siblings through file: dependencies; see
+# docker/link-workspace-singletons.sh).
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    sh pragmatic-server/docker/link-workspace-singletons.sh /workspace && cd pragmatic-server && npm install --no-audit --no-fund && npm run build
+
+# Tenant-admin container (node dist-tenant-admin/admin/control-plane/bin/pragmatic-tenant-admind.js): the control-plane tree compiles
+# separately from the main build (it lives outside src/), and serves the tenant-portal SPA from
+# dist-tenant-admin/admin/tenant-portal/dist (the path TenantAdminServer resolves relative to its own module).
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd pragmatic-server && npm run build:tenant-admin \
+    && cd admin/tenant-portal && npm install --no-audit --no-fund && npm run build \
+    && mkdir -p ../../dist-tenant-admin/admin/tenant-portal \
+    && cp -r dist ../../dist-tenant-admin/admin/tenant-portal/dist \
+    && rm -rf node_modules dist
+
+# IdP sign-in app: the IdP daemon (dist/bin/pragmatic-idpd.js) serves idp-login/dist (the path IdpLoginPage resolves
+# relative to its own module) and refuses to start without it. Only the built dist is kept.
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    cd pragmatic-server/idp-login && npm install --no-audit --no-fund && npm run build && rm -rf node_modules
+
+# Slim the tree that gets baked into the runtime image: the entrypoint runs the
+# compiled dist with plain `node`, so dev dependencies (TypeScript, tsx, test tooling)
+# are not needed at runtime. Prune them workspace-wide; prod deps (incl. native argon2)
+# and the file: sibling links are kept.
+# TODL declares esbuild and typescript as devDependencies, yet its html-bundle build system (reached
+# through the project-system import) imports both at module load (esbuild-bundler.js imports esbuild,
+# tsc-type-checker.js imports typescript), so the server cannot start without them. Stash those two
+# packages across TODL's prune and restore them afterwards; the rest of TODL's dev tooling is dropped.
+# The singleton links (the engine, todl-runtime) are removed first (a plain unlink, so the prune never walks into a
+# sibling) and re-made afterwards; the prune restores the registry copies the siblings' locks name (hence the npmrc).
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    set -e; mkdir /todl-dev-stash; for pkg in esbuild typescript; do \
+      cp -a "/workspace/TODL/node_modules/$pkg" "/todl-dev-stash/$pkg"; \
+    done; \
+    sh /workspace/pragmatic-server/docker/link-workspace-singletons.sh /workspace --unlink; \
+    for d in pragmatic-graph todl-runtime TODL pragmatic-protocol pragmatic-shared todl-identity-engine \
+      todl-connectors-host pragmatic-server; do \
+      (cd "/workspace/$d" && npm prune --omit=dev --no-audit --no-fund); \
+    done; \
+    for pkg in esbuild typescript; do \
+      cp -a "/todl-dev-stash/$pkg" "/workspace/TODL/node_modules/$pkg"; \
+    done; rm -rf /todl-dev-stash; \
+    sh /workspace/pragmatic-server/docker/link-workspace-singletons.sh /workspace; \
+    find /workspace -type f \( -name '*.map' -o -name '*.tsbuildinfo' \) -delete 2>/dev/null || true
+
+FROM node:22-slim AS runtime
+ENV NODE_ENV=production
+RUN useradd --system --create-home --uid 10001 pragmatic
+WORKDIR /app
+COPY --from=builder --chown=pragmatic:pragmatic /workspace /workspace
+WORKDIR /workspace/pragmatic-server
+USER 10001
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "const http=require('node:http');const r=http.request({host:'127.0.0.1',port:process.env.PRAGMATIC_PORT||8080,path:'/healthz'},x=>process.exit(x.statusCode===200?0:1));r.on('error',()=>process.exit(1));r.end()"
+ENTRYPOINT ["node", "dist/bin/pragmatic-serverd.js"]

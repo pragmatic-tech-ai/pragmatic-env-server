@@ -1,0 +1,467 @@
+import { ConnectionFailureKind, QueryCompareOp, RollbackSignal, WriteAtomicity, WriteCapability, WriteConcurrency, WriteFailureKind, WriteOperationKind } from "@pragmatic-tech-ai/todl";
+import type { ExternalFieldValue, ExternalRecord, IAssignedKey, IDataSourceAdapter, PageQuery, PageSlice, QueryComparison, QueryRequest, WriteBatch, WriteFailure, WriteOperation, WriteResult } from "@pragmatic-tech-ai/todl";
+import { ExternalQuery } from "../query/external-query.js";
+import { CypherIdentifier } from "./cypher-identifier.js";
+import type { ICypherSession } from "./cypher-session.js";
+
+/** The versioning state of one graph node, probed via a single MATCH: absent, or present with its
+ *  stored version (null when the node carries no value for the version property). Lets the adapter
+ *  fail CLOSED on a present-but-unversioned node rather than silently overwriting it. */
+type NodeVersionState =
+    | { Exists: false }
+    | { Exists: true; Version: unknown };
+
+/** The result of applying one Cypher op: a failure, or the source-assigned key of an insert; both absent means a plain success. */
+interface ICypherOpOutcome
+{
+    readonly Failure?: WriteFailure;
+    readonly Assigned?: IAssignedKey;
+}
+
+/** Graph adapter: MATCH to read (Where is pushed to the source and trusted, for Query and QueryPage alike), MERGE/DETACH DELETE to write. */
+export class CypherAdapter implements IDataSourceAdapter
+{
+    public static readonly NodeVar = "n";
+    public static readonly PropsAlias = "props";
+    public static readonly VersionAlias = "ver";
+    public static readonly VersionParam = "ver";
+    public static readonly DeletedAlias = "deleted";
+    public static readonly CountFn = "count";
+    public static readonly KeyParam = "key";
+    public static readonly FieldsParam = "fields";
+    public static readonly Match = "MATCH";
+    public static readonly Merge = "MERGE";
+    public static readonly Create = "CREATE";
+    public static readonly KeyAlias = "key";
+    public static readonly RandomUuidFn = "randomUUID()";
+    private static readonly CommaSpace = ", ";
+    private static readonly InsertKeyNotReturnedReason = "cypher insert returned no key";
+    public static readonly SetClause = "SET";
+    public static readonly Return = "RETURN";
+    public static readonly DetachDelete = "DETACH DELETE";
+    public static readonly PropertiesFn = "properties";
+    public static readonly AsKeyword = "AS";
+    public static readonly ParamPrefix = "$";
+    public static readonly OpenParen = "(";
+    public static readonly CloseParen = ")";
+    public static readonly OpenBrace = "{";
+    public static readonly CloseBrace = "}";
+    public static readonly Colon = ":";
+    public static readonly Space = " ";
+    public static readonly Dot = ".";
+    public static readonly MergeAssign = "+=";
+    public static readonly Where = "WHERE";
+    public static readonly And = "AND";
+    public static readonly OrderBy = "ORDER BY";
+    public static readonly Limit = "LIMIT";
+    public static readonly AfterParam = "after";
+    public static readonly LimitParam = "limit";
+    public static readonly WhereParamPrefix = "w";
+    public static readonly GreaterOp = ">";
+    public static readonly EqualOp = "=";
+    public static readonly NotEqualOp = "<>";
+    public static readonly IsNullOp = "IS NULL";
+    public static readonly IsNotNullOp = "IS NOT NULL";
+    private static readonly Operators: ReadonlyMap<QueryCompareOp, string> = new Map([
+        [QueryCompareOp.Eq, "="],
+        [QueryCompareOp.Neq, "<>"],
+        [QueryCompareOp.Lt, "<"],
+        [QueryCompareOp.Lte, "<="],
+        [QueryCompareOp.Gt, ">"],
+        [QueryCompareOp.Gte, ">="],
+        [QueryCompareOp.In, "IN"],
+    ]);
+    public static readonly ToIntegerFn = "toInteger";
+    private static readonly InvalidLimitMessage = "QueryPage Limit must be a positive integer";
+    private static readonly MissingOrderKeyMessage = "QueryPage requires request.OrderKey or at least one field to order by";
+    private static readonly VersionConflictReason = "version mismatch";
+    private static readonly AtomicUnsupportedReason = "atomic write not supported by this connector";
+
+    private static readonly TransientCodes: ReadonlySet<string> = new Set(["ServiceUnavailable", "SessionExpired"]);
+    private static readonly TransientPrefix = "Neo.TransientError.";
+    private static readonly AuthPrefix = "Neo.ClientError.Security.";
+
+    public constructor(private readonly session: ICypherSession)
+    {
+    }
+
+    /** Whether this adapter can enforce an optimistic version guard: always, via a MATCH version probe. */
+    public get CanVersion(): boolean
+    {
+        return true;
+    }
+
+    /** Whether this adapter supports keyset paging: always, via an ORDER BY / LIMIT / `>`-seeked MATCH. */
+    public get CanPage(): boolean
+    {
+        return true;
+    }
+
+    /** Depends only on the driver error's string code; never stringifies the error or reads a secret. */
+    public ClassifyFailure(error: unknown): ConnectionFailureKind
+    {
+        const code = (error !== null && typeof error === "object") ? (error as { code?: unknown }).code : undefined;
+        if (typeof code !== "string")
+        {
+            return ConnectionFailureKind.Permanent;
+        }
+        if (CypherAdapter.TransientCodes.has(code) || code.startsWith(CypherAdapter.TransientPrefix))
+        {
+            return ConnectionFailureKind.Transient;
+        }
+        if (code.startsWith(CypherAdapter.AuthPrefix))
+        {
+            return ConnectionFailureKind.Auth;
+        }
+        return ConnectionFailureKind.Permanent;
+    }
+
+    /** Whether this adapter can run a batch inside a backend transaction: true iff its session can. */
+    public get CanTransact(): boolean
+    {
+        return this.session.Transaction !== undefined;
+    }
+
+    /** Whether this adapter can execute source-keyed inserts: yes, via CREATE ... n.<idKey> = randomUUID() RETURNING it. */
+    public get CanAssignKeys(): boolean
+    {
+        return true;
+    }
+
+    public async Query(request: QueryRequest): Promise<readonly ExternalRecord[]>
+    {
+        const v = CypherAdapter.NodeVar;
+        const label = CypherIdentifier.Quote(request.Source);
+        const params: Record<string, unknown> = {};
+        const terms = CypherAdapter.WhereTerms(request, params);
+        const parts = [CypherAdapter.Match, `${CypherAdapter.OpenParen}${v}${CypherAdapter.Colon}${label}${CypherAdapter.CloseParen}`];
+        if (terms.length > 0)
+        {
+            parts.push(CypherAdapter.Where, terms.join(`${CypherAdapter.Space}${CypherAdapter.And}${CypherAdapter.Space}`));
+        }
+        parts.push(CypherAdapter.Return, `${CypherAdapter.PropertiesFn}${CypherAdapter.OpenParen}${v}${CypherAdapter.CloseParen}`,
+            CypherAdapter.AsKeyword, CypherAdapter.PropsAlias);
+        const rows = await this.session.Run(parts.join(CypherAdapter.Space), params);
+        const records = rows.map(r => (r[CypherAdapter.PropsAlias] ?? {}) as Record<string, unknown>);
+        // Where is enforced at the source, exactly as for QueryPage (so paged and unpaged reads agree); project only. A
+        // re-filter here would disagree with Neo4j (e.g. Integer properties come back as decimal strings).
+        return ExternalQuery.Apply(records, { ...request, Where: undefined });
+    }
+
+    /**
+     * Keyset page: MATCH with the Where terms and a strict `n.key > $after` seek ANDed, ordered ascending on
+     * the key and limited to page.Limit at the source. Where is trusted to the source (not re-applied in
+     * memory). NextAfter is the last fetched node's key, only when a full page came back.
+     *
+     * The order key MUST be unique and non-null for keyset paging: a non-unique key skips duplicates at
+     * page boundaries; a null/missing key is dropped after page 1 (`>` excludes null) and a null last key
+     * ends paging.
+     */
+    public async QueryPage(request: QueryRequest, page: PageQuery): Promise<PageSlice>
+    {
+        if (!Number.isInteger(page.Limit) || page.Limit <= 0)
+        {
+            throw new Error(CypherAdapter.InvalidLimitMessage);
+        }
+        const rawKey = request.OrderKey ?? request.Fields[0];
+        if (rawKey === undefined)
+        {
+            throw new Error(CypherAdapter.MissingOrderKeyMessage);
+        }
+        const v = CypherAdapter.NodeVar;
+        const keyRef = `${v}${CypherAdapter.Dot}${CypherIdentifier.Quote(rawKey)}`;
+        const label = CypherIdentifier.Quote(request.Source);
+        const params: Record<string, unknown> = {};
+        const terms: string[] = [];
+        if (page.After !== undefined)
+        {
+            terms.push([keyRef, CypherAdapter.GreaterOp, `${CypherAdapter.ParamPrefix}${CypherAdapter.AfterParam}`].join(CypherAdapter.Space));
+            params[CypherAdapter.AfterParam] = page.After;
+        }
+        terms.push(...CypherAdapter.WhereTerms(request, params));
+        params[CypherAdapter.LimitParam] = page.Limit;
+        const parts = [CypherAdapter.Match, `${CypherAdapter.OpenParen}${v}${CypherAdapter.Colon}${label}${CypherAdapter.CloseParen}`];
+        if (terms.length > 0)
+        {
+            parts.push(CypherAdapter.Where, terms.join(`${CypherAdapter.Space}${CypherAdapter.And}${CypherAdapter.Space}`));
+        }
+        parts.push(CypherAdapter.Return, `${CypherAdapter.PropertiesFn}${CypherAdapter.OpenParen}${v}${CypherAdapter.CloseParen}`,
+            CypherAdapter.AsKeyword, CypherAdapter.PropsAlias, CypherAdapter.OrderBy, keyRef, CypherAdapter.Limit,
+            `${CypherAdapter.ToIntegerFn}${CypherAdapter.OpenParen}${CypherAdapter.ParamPrefix}${CypherAdapter.LimitParam}${CypherAdapter.CloseParen}`);
+        const rows = await this.session.Run(parts.join(CypherAdapter.Space), params);
+        const raw = rows.map(r => (r[CypherAdapter.PropsAlias] ?? {}) as Record<string, unknown>);
+        // Where is already enforced at the source; project only (no in-memory re-filter, which could drop source-matched rows).
+        const records = ExternalQuery.Apply(raw, { ...request, Where: undefined });
+        const lastKey = raw.length === page.Limit ? raw[raw.length - 1]![rawKey] : undefined;
+        if (lastKey == null)
+        {
+            return { Records: records };
+        }
+        return { Records: records, NextAfter: lastKey as ExternalFieldValue };
+    }
+
+    /** The Where terms as Cypher predicates over the node, binding operands into `params` (w0, w1, ...). */
+    private static WhereTerms(request: QueryRequest, params: Record<string, unknown>): string[]
+    {
+        return (request.Where?.All ?? []).map((c, i) => CypherAdapter.WhereTerm(c, `${CypherAdapter.WhereParamPrefix}${i}`, params));
+    }
+
+    // Cypher's own NULL semantics match SQL's: a comparison with null is null (row excluded); IS NULL also matches missing.
+    private static WhereTerm(c: QueryComparison, param: string, params: Record<string, unknown>): string
+    {
+        const property = `${CypherAdapter.NodeVar}${CypherAdapter.Dot}${CypherIdentifier.Quote(c.Field)}`;
+        if (c.Op === QueryCompareOp.IsNull) return [property, CypherAdapter.IsNullOp].join(CypherAdapter.Space);
+        if (c.Op === QueryCompareOp.IsNotNull) return [property, CypherAdapter.IsNotNullOp].join(CypherAdapter.Space);
+        params[param] = c.Op === QueryCompareOp.In ? [...(c.Values ?? [])] : c.Value;
+        return [property, CypherAdapter.Operators.get(c.Op) ?? CypherAdapter.EqualOp, `${CypherAdapter.ParamPrefix}${param}`].join(CypherAdapter.Space);
+    }
+
+    /** Dispatches on the batch's atomicity axis: resilient Sequential apply, or all-or-nothing Transactional. */
+    public async Apply(batch: WriteBatch): Promise<WriteResult>
+    {
+        if (batch.Atomicity === WriteAtomicity.Transactional)
+        {
+            return this.ApplyTransactional(batch);
+        }
+        return this.ApplySequential(batch);
+    }
+
+    public async Dispose(): Promise<void>
+    {
+        await this.session.Dispose?.();
+    }
+
+    /**
+     * Sequential resilient apply: runs ops in order; a thrown driver fault becomes a WriteFailure{Error}
+     * and the batch CONTINUES to the next op (no rollback). Applied counts only ops that persisted.
+     */
+    private async ApplySequential(batch: WriteBatch): Promise<WriteResult>
+    {
+        return this.RunOps(this.session, batch);
+    }
+
+    /**
+     * Runs every op of `batch` in order against `session`, collecting failures and source-assigned keys. W20: an
+     * applied insert's key is reported under its Ref, so a later op's failure never orphans the CREATEs that applied.
+     */
+    private async RunOps(session: ICypherSession, batch: WriteBatch): Promise<WriteResult>
+    {
+        let applied = 0;
+        const failures: WriteFailure[] = [];
+        const assigned: IAssignedKey[] = [];
+        for (const op of batch.Operations)
+        {
+            const outcome = await this.ApplyOne(session, batch, op);
+            if (outcome.Failure !== undefined)
+            {
+                failures.push(outcome.Failure);
+            }
+            else
+            {
+                applied++;
+                if (outcome.Assigned !== undefined)
+                {
+                    assigned.push(outcome.Assigned);
+                }
+            }
+        }
+        return assigned.length === 0 ? { Applied: applied, Failures: failures } : { Applied: applied, Failures: failures, Assigned: assigned };
+    }
+
+    /**
+     * Transactional all-or-nothing apply. A backend that cannot transact returns every op as Unsupported
+     * (never a silent downgrade to partial). Otherwise the whole op loop runs inside one session
+     * transaction; any Conflict or Error throws a RollbackSignal to abort it, caught here so the collected
+     * failures come back with Applied 0 (an atomic adapter applies nothing on a mid-batch failure).
+     */
+    private async ApplyTransactional(batch: WriteBatch): Promise<WriteResult>
+    {
+        if (!WriteCapability.CanTransact(this))
+        {
+            return {
+                Applied: 0,
+                Failures: batch.Operations.map(op => ({
+                    Key: op.Key,
+                    Kind: WriteFailureKind.Unsupported,
+                    Reason: CypherAdapter.AtomicUnsupportedReason,
+                })),
+            };
+        }
+        try
+        {
+            return await this.session.Transaction!(async (tx) =>
+            {
+                const result = await this.RunOps(tx, batch);
+                if (result.Failures.length > 0)
+                {
+                    // Abort the backend transaction; the caller reports nothing as applied.
+                    throw new RollbackSignal({ Applied: 0, Failures: result.Failures });
+                }
+                return result;
+            });
+        }
+        catch (error)
+        {
+            if (error instanceof RollbackSignal)
+            {
+                return error.Result;
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Applies one op against a given session (so Sequential and Transactional share the logic):
+     * returns {} on success, { Assigned } for an insert, or { Failure } (Conflict for a version-guarded no-op,
+     * Error for a thrown driver fault) otherwise.
+     */
+    private async ApplyOne(session: ICypherSession, batch: WriteBatch, op: WriteOperation): Promise<ICypherOpOutcome>
+    {
+        try
+        {
+            if (op.Kind === WriteOperationKind.Insert)
+            {
+                return await this.ApplyInsert(session, batch, op);
+            }
+            if (op.Kind === WriteOperationKind.Delete)
+            {
+                return await this.Delete(session, batch, op)
+                    ? {}
+                    : { Failure: { Key: op.Key, Kind: WriteFailureKind.Conflict, Reason: CypherAdapter.VersionConflictReason } };
+            }
+            return await this.ApplyUpsert(session, batch, op)
+                ? {}
+                : { Failure: { Key: op.Key, Kind: WriteFailureKind.Conflict, Reason: CypherAdapter.VersionConflictReason } };
+        }
+        catch (error)
+        {
+            return { Failure: { Key: op.Key, Kind: WriteFailureKind.Error, Reason: CypherAdapter.ErrorReason(error) } };
+        }
+    }
+
+    /**
+     * Runs one source-keyed insert: `CREATE (n:<Label>) SET n += $fields, n.<idKey> = randomUUID() RETURN n.<idKey>
+     * AS key[, n.<ver> AS ver]`. The source (Neo4j's randomUUID()) assigns a stable property key — elementId is not
+     * stable across stores — reported under the op's Ref, with the row's version when the batch declares a version field.
+     */
+    private async ApplyInsert(session: ICypherSession, batch: WriteBatch, op: WriteOperation): Promise<ICypherOpOutcome>
+    {
+        const label = CypherIdentifier.Quote(batch.Source);
+        const idRef = `${CypherAdapter.NodeVar}${CypherAdapter.Dot}${CypherIdentifier.Quote(batch.IdKey)}`;
+        const setItems = [
+            `${CypherAdapter.NodeVar} ${CypherAdapter.MergeAssign} ${CypherAdapter.ParamPrefix}${CypherAdapter.FieldsParam}`,
+            `${idRef} ${CypherAdapter.EqualOp} ${CypherAdapter.RandomUuidFn}`,
+        ].join(CypherAdapter.CommaSpace);
+        const returnItems = [`${idRef} ${CypherAdapter.AsKeyword} ${CypherAdapter.KeyAlias}`];
+        if (batch.VersionField !== undefined)
+        {
+            returnItems.push(`${CypherAdapter.NodeVar}${CypherAdapter.Dot}${CypherIdentifier.Quote(batch.VersionField)} ${CypherAdapter.AsKeyword} ${CypherAdapter.VersionAlias}`);
+        }
+        const cypher = [CypherAdapter.Create, `${CypherAdapter.OpenParen}${CypherAdapter.NodeVar}${CypherAdapter.Colon}${label}${CypherAdapter.CloseParen}`,
+            CypherAdapter.SetClause, setItems, CypherAdapter.Return, returnItems.join(CypherAdapter.CommaSpace)].join(CypherAdapter.Space);
+        const rows = await session.Run(cypher, { [CypherAdapter.FieldsParam]: { ...op.Fields } });
+        const key = rows[0]?.[CypherAdapter.KeyAlias];
+        if (key === undefined || key === null)
+        {
+            return { Failure: { Key: op.Key, Kind: WriteFailureKind.Error, Reason: CypherAdapter.InsertKeyNotReturnedReason } };
+        }
+        const version = batch.VersionField === undefined ? undefined : rows[0]?.[CypherAdapter.VersionAlias];
+        return { Assigned: version === undefined || version === null
+            ? { Ref: op.Ref!, Key: CypherAdapter.Cell(key) }
+            : { Ref: op.Ref!, Key: CypherAdapter.Cell(key), Version: CypherAdapter.Cell(version) } };
+    }
+
+    /** An external field value from a raw driver cell (string/number/boolean/null pass; anything else is its text). */
+    private static Cell(value: unknown): ExternalFieldValue
+    {
+        if (value === undefined || value === null) return null;
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+        return String(value);
+    }
+
+    private IdPattern(batch: WriteBatch): string
+    {
+        const label = CypherIdentifier.Quote(batch.Source);
+        const idKey = CypherIdentifier.Quote(batch.IdKey);
+        const param = `${CypherAdapter.ParamPrefix}${CypherAdapter.KeyParam}`;
+        return `${CypherAdapter.OpenParen}${CypherAdapter.NodeVar}${CypherAdapter.Colon}${label}${CypherAdapter.Space}`
+            + `${CypherAdapter.OpenBrace}${idKey}${CypherAdapter.Colon}${CypherAdapter.Space}${param}${CypherAdapter.CloseBrace}${CypherAdapter.CloseParen}`;
+    }
+
+    /** Runs one upsert against the given session; returns false when a version-guarded upsert must not apply. */
+    private async ApplyUpsert(session: ICypherSession, batch: WriteBatch, op: WriteOperation): Promise<boolean>
+    {
+        if (batch.Concurrency === WriteConcurrency.Optimistic && batch.VersionField !== undefined)
+        {
+            const state = await this.ReadVersionState(session, batch, op);
+            if (state.Exists)
+            {
+                // Apply only when a present node's stored version matches op.Version with BOTH non-null.
+                // A present-but-unversioned node (stored null), a null incoming version, or any difference
+                // is a Conflict -- never a silent overwrite (the #7 fail-closed fix).
+                const incoming = op.Version ?? null;
+                if (state.Version === null || incoming === null || state.Version !== incoming)
+                {
+                    return false;
+                }
+            }
+            // Exists:false -> absent -> writable (optimistic insert).
+        }
+        const cypher = [CypherAdapter.Merge, this.IdPattern(batch), CypherAdapter.SetClause, CypherAdapter.NodeVar,
+            CypherAdapter.MergeAssign, `${CypherAdapter.ParamPrefix}${CypherAdapter.FieldsParam}`].join(CypherAdapter.Space);
+        const fields: Record<string, unknown> = { ...op.Fields, [batch.IdKey]: op.Key };
+        await session.Run(cypher, { [CypherAdapter.KeyParam]: op.Key, [CypherAdapter.FieldsParam]: fields });
+        return true;
+    }
+
+    /**
+     * Probes a node in a single MATCH, distinguishing three states so the adapter can fail CLOSED:
+     * absent (zero rows -> Exists:false), present-but-unversioned (Version null), and versioned
+     * (Version is the stored value).
+     */
+    private async ReadVersionState(session: ICypherSession, batch: WriteBatch, op: WriteOperation): Promise<NodeVersionState>
+    {
+        const versionField = CypherIdentifier.Quote(batch.VersionField!);
+        const cypher = [CypherAdapter.Match, this.IdPattern(batch), CypherAdapter.Return,
+            `${CypherAdapter.NodeVar}${CypherAdapter.Dot}${versionField}`, CypherAdapter.AsKeyword, CypherAdapter.VersionAlias].join(CypherAdapter.Space);
+        const rows = await session.Run(cypher, { [CypherAdapter.KeyParam]: op.Key });
+        if (rows.length === 0)
+        {
+            return { Exists: false };
+        }
+        return { Exists: true, Version: rows[0]![CypherAdapter.VersionAlias] ?? null };
+    }
+
+    /**
+     * Deletes the node; returns false for a Conflict. LastWriteWins (or no VersionField) deletes unconditionally.
+     * Optimistic is fail-closed: a null op.Version is a Conflict with no statement run, otherwise the delete is
+     * guarded in the MATCH (`WHERE n.<ver> = $ver DETACH DELETE n RETURN count(n)`) and a count of 0 (stale,
+     * unversioned or absent) is a Conflict.
+     */
+    private async Delete(session: ICypherSession, batch: WriteBatch, op: WriteOperation): Promise<boolean>
+    {
+        const params: Record<string, unknown> = { [CypherAdapter.KeyParam]: op.Key };
+        if (batch.Concurrency !== WriteConcurrency.Optimistic || batch.VersionField === undefined)
+        {
+            await session.Run([CypherAdapter.Match, this.IdPattern(batch), CypherAdapter.DetachDelete, CypherAdapter.NodeVar].join(CypherAdapter.Space), params);
+            return true;
+        }
+        if (op.Version === undefined || op.Version === null)
+        {
+            return false;
+        }
+        params[CypherAdapter.VersionParam] = op.Version;
+        const versionRef = `${CypherAdapter.NodeVar}${CypherAdapter.Dot}${CypherIdentifier.Quote(batch.VersionField)}`;
+        const count = `${CypherAdapter.CountFn}${CypherAdapter.OpenParen}${CypherAdapter.NodeVar}${CypherAdapter.CloseParen}`;
+        const cypher = [CypherAdapter.Match, this.IdPattern(batch), CypherAdapter.Where, versionRef, CypherAdapter.EqualOp,
+            `${CypherAdapter.ParamPrefix}${CypherAdapter.VersionParam}`, CypherAdapter.DetachDelete, CypherAdapter.NodeVar,
+            CypherAdapter.Return, count, CypherAdapter.AsKeyword, CypherAdapter.DeletedAlias].join(CypherAdapter.Space);
+        const rows = await session.Run(cypher, params);
+        return Number(rows[0]?.[CypherAdapter.DeletedAlias] ?? 0) > 0;
+    }
+
+    private static ErrorReason(error: unknown): string
+    {
+        return error instanceof Error ? error.message : String(error);
+    }
+}

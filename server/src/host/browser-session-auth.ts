@@ -1,0 +1,169 @@
+import type { IncomingHttpHeaders, IncomingMessage } from 'node:http'
+import type { TLSSocket } from 'node:tls'
+
+/** A realm-bound session token presented by a browser cookie. The token is a secret: never log or echo it. */
+export interface BrowserCredential
+{
+    Environment: string
+    Token: string
+}
+
+/** Browser session-cookie auth: builds the Set-Cookie, parses the cookie back into (environment, token), and enforces the
+ *  Origin allowlist that defends the cookie-authenticated WebSocket upgrade against cross-site hijacking.
+ *  The cookie value is `<environment>.<token>` so a same-origin app that sends no ?environment= still resolves its environment. */
+export class BrowserSessionAuth
+{
+    public static readonly CookieName = 'ps_session'
+    private static readonly SessionPath = '/auth/session'
+    private static readonly LogoutPath = '/auth/logout'
+    private static readonly CookieHeader = 'cookie'
+    private static readonly OriginHeader = 'origin'
+    private static readonly HostHeader = 'host'
+    private static readonly ForwardedProtoHeader = 'x-forwarded-proto'
+    private static readonly HttpsProto = 'https'
+    private static readonly SecureOriginScheme = 'https://'
+    private static readonly PlainOriginScheme = 'http://'
+    private static readonly PairSeparator = ';'
+    private static readonly NameValueSeparator = '='
+    private static readonly EnvironmentTokenSeparator = '.'
+    private static readonly TokenPattern = /^[A-Za-z0-9_-]+$/
+    private static readonly CookieAttributes = '; Path=/; HttpOnly; SameSite=Strict'
+    private static readonly SecureAttribute = '; Secure'
+    private static readonly MaxAgeAttribute = '; Max-Age='
+    private static readonly MillisPerSecond = 1000
+
+    private readonly allowedOrigins: ReadonlySet<string>
+    private readonly trustForwardedProto: boolean
+
+    public constructor(allowedOrigins: readonly string[] = [], trustForwardedProto = false)
+    {
+        this.allowedOrigins = new Set(allowedOrigins)
+        this.trustForwardedProto = trustForwardedProto
+    }
+
+    public BuildSetCookie(req: IncomingMessage | undefined, environmentId: string, token: string, expiresAt: Date, now: Date = new Date()): string
+    {
+        const seconds = Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / BrowserSessionAuth.MillisPerSecond))
+        const value = encodeURIComponent(environmentId) + BrowserSessionAuth.EnvironmentTokenSeparator + token
+        return BrowserSessionAuth.CookieName + BrowserSessionAuth.NameValueSeparator + value + BrowserSessionAuth.CookieAttributes
+            + BrowserSessionAuth.MaxAgeAttribute + seconds + (this.IsSecure(req) ? BrowserSessionAuth.SecureAttribute : '')
+    }
+
+    public BuildClearCookie(req: IncomingMessage | undefined): string
+    {
+        return BrowserSessionAuth.CookieName + BrowserSessionAuth.NameValueSeparator + BrowserSessionAuth.CookieAttributes
+            + BrowserSessionAuth.MaxAgeAttribute + '0' + (this.IsSecure(req) ? BrowserSessionAuth.SecureAttribute : '')
+    }
+
+    /** Cookie-session endpoints answer an unidentified caller with 401 rather than the generic no-environment 404. */
+    public static IsSessionPath(path: string): boolean
+    {
+        return path === BrowserSessionAuth.SessionPath || path === BrowserSessionAuth.LogoutPath
+    }
+
+    /** The environment named by the session cookie, or null. Unauthenticated: a routing hint only (the token still has to validate). */
+    public CookieEnvironment(headers: IncomingHttpHeaders): string | null
+    {
+        return this.Parse(headers)?.Environment ?? null
+    }
+
+    /** The cookie credential if the request carries a well-formed cookie and its Origin is acceptable; otherwise null (deny).
+     *  requireOrigin = true (WebSocket upgrade, state-changing requests): a missing Origin is denied. */
+    public Credential(req: IncomingMessage, requireOrigin: boolean): BrowserCredential | null
+    {
+        const credential = this.Parse(req.headers)
+        if (credential === null || !this.OriginAllowed(req, requireOrigin))
+        {
+            return null
+        }
+        return credential
+    }
+
+    private OriginAllowed(req: IncomingMessage, requireOrigin: boolean): boolean
+    {
+        const headers = req.headers
+        const origin = headers[BrowserSessionAuth.OriginHeader]
+        if (origin === undefined)
+        {
+            return !requireOrigin
+        }
+        if (typeof origin !== 'string')
+        {
+            return false
+        }
+        if (this.allowedOrigins.has(origin))
+        {
+            return true
+        }
+        const host = headers[BrowserSessionAuth.HostHeader]
+        try
+        {
+            const scheme = this.IsSecure(req) ? BrowserSessionAuth.SecureOriginScheme : BrowserSessionAuth.PlainOriginScheme
+            return typeof host === 'string' && host.length > 0 && origin === scheme + host
+        }
+        catch
+        {
+            return false
+        }
+    }
+
+    private Parse(headers: IncomingHttpHeaders): BrowserCredential | null
+    {
+        const header = headers[BrowserSessionAuth.CookieHeader]
+        if (typeof header !== 'string')
+        {
+            return null
+        }
+        let value: string | null = null
+        for (const pair of header.split(BrowserSessionAuth.PairSeparator))
+        {
+            const index = pair.indexOf(BrowserSessionAuth.NameValueSeparator)
+            if (index < 0 || pair.slice(0, index).trim() !== BrowserSessionAuth.CookieName)
+            {
+                continue
+            }
+            if (value !== null)
+            {
+                return null
+            }
+            value = pair.slice(index + 1).trim()
+        }
+        if (value === null)
+        {
+            return null
+        }
+        const split = value.lastIndexOf(BrowserSessionAuth.EnvironmentTokenSeparator)
+        if (split <= 0)
+        {
+            return null
+        }
+        const token = value.slice(split + 1)
+        if (!BrowserSessionAuth.TokenPattern.test(token))
+        {
+            return null
+        }
+        try
+        {
+            const environment = decodeURIComponent(value.slice(0, split))
+            return environment.length > 0 ? { Environment: environment, Token: token } : null
+        }
+        catch
+        {
+            return null
+        }
+    }
+
+    private IsSecure(req: IncomingMessage | undefined): boolean
+    {
+        if (req === undefined)
+        {
+            return false
+        }
+        if ((req.socket as TLSSocket | undefined)?.encrypted === true && !this.trustForwardedProto)
+        {
+            return true
+        }
+        const proto = req.headers[BrowserSessionAuth.ForwardedProtoHeader]
+        return this.trustForwardedProto && proto === BrowserSessionAuth.HttpsProto
+    }
+}

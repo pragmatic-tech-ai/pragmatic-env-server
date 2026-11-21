@@ -1,0 +1,439 @@
+import { AuthMethod, Credential, PresentedSecret, AuthenticatedResult, type IAuthenticator, type Session, type Realm } from '@pragmatic-tech-ai/pragmatic-identity'
+import type { ServerIdentityPack } from '@pragmatic-tech-ai/pragmatic-identity-store'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { RequestBody } from './request-body.js'
+import { type MachineCertIdentity, NullAccessAuditSink, AuditSurface, AuditOutcome, type IAccessAuditSink, type AccessAuditEvent } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { BrowserSessionAuth } from './browser-session-auth.js'
+import { trace } from '@opentelemetry/api'
+import type { RequestInstrumentation } from '../observability/request-instrumentation.js'
+import type { ICallerCredentialRevoker } from './connectors/caller-credentials.js'
+import { SignInPage } from './sign-in-page.js'
+
+/** The OIDC surface the auth endpoint needs: begin an authorization and look up the OIDC authenticator.
+ *  Satisfied structurally by the cloud OIDC identity-provider packs. */
+export interface OidcFrontDoor
+{
+    BeginAuthorization(realm: Realm): Promise<{ Url: string; State: string }>
+    AuthenticatorFor(method: AuthMethod): IAuthenticator | undefined
+}
+
+/** A verified TLS peer identity plus the realm's Machine authenticator; absent when client TLS is not configured. */
+export interface MachineAuthContext
+{
+    authenticator: IAuthenticator
+    identity: MachineCertIdentity
+}
+
+/** Minimal deny-by-default token-issuance router: local login + OIDC begin/callback.
+ *  Secrets cross as PresentedSecret and are cleared; failures return a generic 401. */
+export class AuthHttpEndpoint
+{
+    private static readonly BaseUrl = 'http://localhost'
+    private static readonly LoginPath = '/auth/login'
+    private static readonly OidcBeginPath = '/auth/oidc/begin'
+    private static readonly OidcCallbackPath = '/auth/oidc/callback'
+    private static readonly MachinePath = '/auth/machine'
+    private static readonly BrowserLoginPath = '/auth/browser-login'
+    private static readonly SessionPath = '/auth/session'
+    private static readonly LogoutPath = '/auth/logout'
+    private static readonly SetCookieHeader = 'Set-Cookie'
+    private static readonly EnvironmentKey = 'environment'
+    private static readonly PrincipalIdKey = 'principalId'
+    private static readonly NoContentStatus = 204
+    private static readonly UnauthenticatedError = 'unauthenticated'
+    private static readonly AuthOk = 'authenticated'
+    private static readonly AuthRejected = 'authentication rejected'
+    private static readonly MachineUnauthorizedError = 'machine authentication failed'
+    private static readonly PostMethod = 'POST'
+    private static readonly GetMethod = 'GET'
+    private static readonly HttpSurface = 'http'
+    private static readonly ContentTypeHeader = 'Content-Type'
+    private static readonly LocationHeader = 'Location'
+    private static readonly JsonContentType = 'application/json'
+    private static readonly MaxBodyBytes = 4096
+    private static readonly CodeParam = 'code'
+    private static readonly StateParam = 'state'
+    private static readonly InvalidCredentialsError = 'invalid email or password'
+    private static readonly BadRequestError = 'bad request'
+    private static readonly NotFoundError = 'not found'
+    private static readonly MethodNotAllowedError = 'method not allowed'
+    private static readonly InternalError = 'internal error'
+    private static readonly OkStatus = 200
+    private static readonly FoundStatus = 302
+    private static readonly BadRequestStatus = 400
+    private static readonly UnauthorizedStatus = 401
+    private static readonly NotFoundStatus = 404
+    private static readonly MethodNotAllowedStatus = 405
+    private static readonly InternalErrorStatus = 500
+    private static readonly EmailKey = 'email'
+    private static readonly PasswordKey = 'password'
+    private static readonly TokenKey = 'token'
+    private static readonly ExpiresAtKey = 'expiresAt'
+    private static readonly ErrorKey = 'error'
+    private static readonly CacheControlHeader = 'Cache-Control'
+    private static readonly NoStore = 'no-store'
+    private static readonly HtmlContentType = 'text/html; charset=utf-8'
+    private static readonly CspHeader = 'Content-Security-Policy'
+    private static readonly NoSniffHeader = 'X-Content-Type-Options'
+    private static readonly NoSniffValue = 'nosniff'
+    private static readonly ReferrerPolicyHeader = 'Referrer-Policy'
+    private static readonly NoReferrer = 'no-referrer'
+
+    private readonly pack: ServerIdentityPack
+    private readonly realm: Realm
+    private readonly oidc: OidcFrontDoor | undefined
+    private readonly machine: MachineAuthContext | undefined
+    private readonly audit: IAccessAuditSink
+    private readonly instrumentation: RequestInstrumentation | undefined
+    private readonly browser: BrowserSessionAuth
+    private readonly credentials: ICallerCredentialRevoker | undefined
+
+    /** `credentials`: revoked for the principal that signs out (its per-user source credentials, R27). */
+    public constructor(pack: ServerIdentityPack, realm: Realm, oidc?: OidcFrontDoor, machine?: MachineAuthContext, instrumentation?: RequestInstrumentation, audit: IAccessAuditSink = new NullAccessAuditSink(), browser: BrowserSessionAuth = new BrowserSessionAuth(), credentials?: ICallerCredentialRevoker)
+    {
+        this.credentials = credentials
+        this.browser = browser
+        this.instrumentation = instrumentation
+        this.audit = audit
+        this.machine = machine
+        this.pack = pack
+        this.realm = realm
+        this.oidc = oidc
+    }
+
+    public async Handle(req: IncomingMessage, res: ServerResponse): Promise<void>
+    {
+        try
+        {
+            if (this.instrumentation === undefined)
+            {
+                await this.Route(req, res)
+            }
+            else
+            {
+                const method = `${req.method ?? AuthHttpEndpoint.GetMethod} ${AuthHttpEndpoint.HttpSurface}`
+                await this.instrumentation.Run({ method, environment: this.realm.Id, principal: '' }, () => this.Route(req, res))
+            }
+        }
+        catch
+        {
+            if (res.headersSent)
+            {
+                res.end()
+            }
+            else
+            {
+                this.WriteJson(res, AuthHttpEndpoint.InternalErrorStatus, AuthHttpEndpoint.InternalError)
+            }
+        }
+    }
+
+    private async Route(req: IncomingMessage, res: ServerResponse): Promise<void>
+    {
+        const url = new URL(req.url ?? '/', AuthHttpEndpoint.BaseUrl)
+        const method = req.method ?? AuthHttpEndpoint.GetMethod
+        if (url.pathname === AuthHttpEndpoint.LoginPath)
+        {
+            if (method !== AuthHttpEndpoint.PostMethod)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.MethodNotAllowedStatus, AuthHttpEndpoint.MethodNotAllowedError)
+                return
+            }
+            await this.Login(req, res, false)
+            return
+        }
+        if (url.pathname === AuthHttpEndpoint.BrowserLoginPath)
+        {
+            if (method !== AuthHttpEndpoint.PostMethod)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.MethodNotAllowedStatus, AuthHttpEndpoint.MethodNotAllowedError)
+                return
+            }
+            await this.Login(req, res, true)
+            return
+        }
+        if (url.pathname === SignInPage.Path)
+        {
+            if (method !== AuthHttpEndpoint.GetMethod)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.MethodNotAllowedStatus, AuthHttpEndpoint.MethodNotAllowedError)
+                return
+            }
+            this.SignIn(url, res)
+            return
+        }
+        if (url.pathname === AuthHttpEndpoint.OidcBeginPath)
+        {
+            if (this.oidc === undefined)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.NotFoundStatus, AuthHttpEndpoint.NotFoundError)
+                return
+            }
+            if (method !== AuthHttpEndpoint.GetMethod)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.MethodNotAllowedStatus, AuthHttpEndpoint.MethodNotAllowedError)
+                return
+            }
+            await this.OidcBegin(res)
+            return
+        }
+        if (url.pathname === AuthHttpEndpoint.OidcCallbackPath)
+        {
+            if (this.oidc === undefined)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.NotFoundStatus, AuthHttpEndpoint.NotFoundError)
+                return
+            }
+            if (method !== AuthHttpEndpoint.GetMethod)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.MethodNotAllowedStatus, AuthHttpEndpoint.MethodNotAllowedError)
+                return
+            }
+            await this.OidcCallback(url, res)
+            return
+        }
+        if (url.pathname === AuthHttpEndpoint.MachinePath)
+        {
+            if (this.machine === undefined)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.NotFoundStatus, AuthHttpEndpoint.NotFoundError)
+                return
+            }
+            if (method !== AuthHttpEndpoint.PostMethod)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.MethodNotAllowedStatus, AuthHttpEndpoint.MethodNotAllowedError)
+                return
+            }
+            await this.MachineLogin(this.machine, res)
+            return
+        }
+        if (url.pathname === AuthHttpEndpoint.SessionPath)
+        {
+            if (method !== AuthHttpEndpoint.GetMethod)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.MethodNotAllowedStatus, AuthHttpEndpoint.MethodNotAllowedError)
+                return
+            }
+            await this.CurrentSession(req, res)
+            return
+        }
+        if (url.pathname === AuthHttpEndpoint.LogoutPath)
+        {
+            if (method !== AuthHttpEndpoint.PostMethod)
+            {
+                this.WriteJson(res, AuthHttpEndpoint.MethodNotAllowedStatus, AuthHttpEndpoint.MethodNotAllowedError)
+                return
+            }
+            await this.Logout(req, res)
+            return
+        }
+        this.WriteJson(res, AuthHttpEndpoint.NotFoundStatus, AuthHttpEndpoint.NotFoundError)
+    }
+
+    /** The sign-in page for this environment (its own id, never the query's text); the return path only if same-origin. */
+    private SignIn(url: URL, res: ServerResponse): void
+    {
+        const html = SignInPage.Render(this.realm.Id, SignInPage.SafeReturn(url.searchParams.get(SignInPage.ReturnParam)))
+        res.statusCode = AuthHttpEndpoint.OkStatus
+        res.setHeader(AuthHttpEndpoint.ContentTypeHeader, AuthHttpEndpoint.HtmlContentType)
+        res.setHeader(AuthHttpEndpoint.CacheControlHeader, AuthHttpEndpoint.NoStore)
+        res.setHeader(AuthHttpEndpoint.CspHeader, SignInPage.ContentSecurityPolicy)
+        res.setHeader(AuthHttpEndpoint.NoSniffHeader, AuthHttpEndpoint.NoSniffValue)
+        res.setHeader(AuthHttpEndpoint.ReferrerPolicyHeader, AuthHttpEndpoint.NoReferrer)
+        res.end(html)
+    }
+
+    /** Cookie-authenticated whoami: 200 with the session's realm + principal, else a clean 401 (never echoes the cookie). */
+    private async CurrentSession(req: IncomingMessage, res: ServerResponse): Promise<void>
+    {
+        const session = await this.ResolveCookieSession(req, false)
+        if (session === null)
+        {
+            this.WriteJson(res, AuthHttpEndpoint.UnauthorizedStatus, AuthHttpEndpoint.UnauthenticatedError)
+            return
+        }
+        this.WriteBody(res, AuthHttpEndpoint.OkStatus, JSON.stringify({ [AuthHttpEndpoint.EnvironmentKey]: session.RealmId, [AuthHttpEndpoint.PrincipalIdKey]: session.PrincipalId, [AuthHttpEndpoint.ExpiresAtKey]: session.ExpiresAt.toISOString() }))
+    }
+
+    private async Logout(req: IncomingMessage, res: ServerResponse): Promise<void>
+    {
+        const session = await this.ResolveCookieSession(req, true)
+        if (session === null)
+        {
+            this.WriteJson(res, AuthHttpEndpoint.UnauthorizedStatus, AuthHttpEndpoint.UnauthenticatedError)
+            return
+        }
+        await this.pack.Sessions.Revoke(session.Id)
+        await this.credentials?.Revoke(session.PrincipalId)
+        res.setHeader(AuthHttpEndpoint.SetCookieHeader, this.browser.BuildClearCookie(req))
+        res.setHeader(AuthHttpEndpoint.CacheControlHeader, AuthHttpEndpoint.NoStore)
+        res.statusCode = AuthHttpEndpoint.NoContentStatus
+        res.end()
+    }
+
+    private async ResolveCookieSession(req: IncomingMessage, requireOrigin: boolean): Promise<Session | null>
+    {
+        const credential = this.browser.Credential(req, requireOrigin)
+        if (credential === null || credential.Environment !== this.realm.Id)
+        {
+            return null
+        }
+        const session = await this.pack.Sessions.Validate(credential.Token)
+        return session !== null && session.RealmId === this.realm.Id ? session : null
+    }
+
+    private async MachineLogin(machine: MachineAuthContext, res: ServerResponse): Promise<void>
+    {
+        if (machine.identity.Authorized !== true || machine.identity.Fingerprint.length === 0)
+        {
+            this.Emit(AuthHttpEndpoint.MachinePath, AuditOutcome.AuthFailure)
+            this.WriteJson(res, AuthHttpEndpoint.UnauthorizedStatus, AuthHttpEndpoint.MachineUnauthorizedError)
+            return
+        }
+        const result = await machine.authenticator.Authenticate(new Credential(AuthMethod.Machine, machine.identity.Fingerprint), new PresentedSecret(''), this.realm)
+        if (!(result instanceof AuthenticatedResult))
+        {
+            this.Emit(AuthHttpEndpoint.MachinePath, AuditOutcome.AuthFailure)
+            this.WriteJson(res, AuthHttpEndpoint.UnauthorizedStatus, AuthHttpEndpoint.MachineUnauthorizedError)
+            return
+        }
+        await this.MintSession(res, result, false)
+        this.Emit(AuthHttpEndpoint.MachinePath, AuditOutcome.Allow, result.Principal.Id)
+    }
+
+    private async Login(req: IncomingMessage, res: ServerResponse, browser: boolean): Promise<void>
+    {
+        const body = await RequestBody.ReadJson(req, AuthHttpEndpoint.MaxBodyBytes)
+        const email = body?.[AuthHttpEndpoint.EmailKey]
+        const password = body?.[AuthHttpEndpoint.PasswordKey]
+        if (typeof email !== 'string' || typeof password !== 'string')
+        {
+            this.WriteJson(res, AuthHttpEndpoint.BadRequestStatus, AuthHttpEndpoint.BadRequestError)
+            return
+        }
+        const authenticator = this.pack.AuthenticatorFor(AuthMethod.Local)
+        if (authenticator === undefined)
+        {
+            this.Emit(AuthHttpEndpoint.LoginPath, AuditOutcome.AuthFailure)
+            this.WriteJson(res, AuthHttpEndpoint.UnauthorizedStatus, AuthHttpEndpoint.InvalidCredentialsError)
+            return
+        }
+        const presented = new PresentedSecret(password)
+        try
+        {
+            const result = await authenticator.Authenticate(new Credential(AuthMethod.Local, email), presented, this.realm)
+            if (!(result instanceof AuthenticatedResult))
+            {
+                this.Emit(AuthHttpEndpoint.LoginPath, AuditOutcome.AuthFailure)
+                this.WriteJson(res, AuthHttpEndpoint.UnauthorizedStatus, AuthHttpEndpoint.InvalidCredentialsError)
+                return
+            }
+            await this.MintSession(res, result, browser)
+            this.Emit(browser ? AuthHttpEndpoint.BrowserLoginPath : AuthHttpEndpoint.LoginPath, AuditOutcome.Allow, result.Principal.Id)
+        }
+        finally
+        {
+            presented.Clear()
+        }
+    }
+
+    private async OidcBegin(res: ServerResponse): Promise<void>
+    {
+        if (this.oidc === undefined)
+        {
+            this.WriteJson(res, AuthHttpEndpoint.NotFoundStatus, AuthHttpEndpoint.NotFoundError)
+            return
+        }
+        const begun = await this.oidc.BeginAuthorization(this.realm)
+        res.statusCode = AuthHttpEndpoint.FoundStatus
+        res.setHeader(AuthHttpEndpoint.LocationHeader, begun.Url)
+        res.end()
+    }
+
+    private async OidcCallback(url: URL, res: ServerResponse): Promise<void>
+    {
+        const authenticator = this.oidc?.AuthenticatorFor(AuthMethod.Oidc)
+        if (authenticator === undefined)
+        {
+            this.Emit(AuthHttpEndpoint.OidcCallbackPath, AuditOutcome.AuthFailure)
+            this.WriteJson(res, AuthHttpEndpoint.NotFoundStatus, AuthHttpEndpoint.NotFoundError)
+            return
+        }
+        const code = url.searchParams.get(AuthHttpEndpoint.CodeParam)
+        const state = url.searchParams.get(AuthHttpEndpoint.StateParam)
+        if (code === null || state === null)
+        {
+            this.WriteJson(res, AuthHttpEndpoint.BadRequestStatus, AuthHttpEndpoint.BadRequestError)
+            return
+        }
+        const presented = new PresentedSecret(code)
+        try
+        {
+            const result = await authenticator.Authenticate(new Credential(AuthMethod.Oidc, state), presented, this.realm)
+            if (!(result instanceof AuthenticatedResult))
+            {
+                this.Emit(AuthHttpEndpoint.OidcCallbackPath, AuditOutcome.AuthFailure)
+                this.WriteJson(res, AuthHttpEndpoint.UnauthorizedStatus, AuthHttpEndpoint.InvalidCredentialsError)
+                return
+            }
+            await this.MintSession(res, result, false)
+            this.Emit(AuthHttpEndpoint.OidcCallbackPath, AuditOutcome.Allow, result.Principal.Id)
+        }
+        finally
+        {
+            presented.Clear()
+        }
+    }
+
+    private Emit(path: string, outcome: AuditOutcome, principalId?: string): void
+    {
+        const event: AccessAuditEvent = {
+            Timestamp: new Date(),
+            EnvironmentId: this.realm.Id,
+            PrincipalId: principalId,
+            Surface: AuditSurface.Http,
+            MethodOrPath: path,
+            Outcome: outcome,
+            Reason: outcome === AuditOutcome.Allow ? AuthHttpEndpoint.AuthOk : AuthHttpEndpoint.AuthRejected,
+            CorrelationId: trace.getActiveSpan()?.spanContext().traceId,
+        }
+        try
+        {
+            void this.audit.Record(event).catch(() => {})
+        }
+        catch
+        {
+            // audit is fire-and-forget: it must never change the 200/401 the auth route returns
+        }
+    }
+
+    /** Bearer mode returns the token in the body (Node clients). Browser mode sets the HttpOnly cookie and returns only non-secret metadata. */
+    private async MintSession(res: ServerResponse, result: AuthenticatedResult, browser: boolean): Promise<void>
+    {
+        const session = await this.pack.Sessions.Issue(result.Principal)
+        if (browser)
+        {
+            res.setHeader(AuthHttpEndpoint.SetCookieHeader, this.browser.BuildSetCookie(res.req, this.realm.Id, session.Id, session.ExpiresAt))
+            this.WriteBody(res, AuthHttpEndpoint.OkStatus, JSON.stringify({ [AuthHttpEndpoint.EnvironmentKey]: this.realm.Id, [AuthHttpEndpoint.PrincipalIdKey]: session.PrincipalId, [AuthHttpEndpoint.ExpiresAtKey]: session.ExpiresAt.toISOString() }))
+            return
+        }
+        this.WriteBody(res, AuthHttpEndpoint.OkStatus, JSON.stringify({ [AuthHttpEndpoint.TokenKey]: session.Id, [AuthHttpEndpoint.ExpiresAtKey]: session.ExpiresAt.toISOString() }))
+    }
+
+    private WriteJson(res: ServerResponse, status: number, error: string): void
+    {
+        this.WriteBody(res, status, JSON.stringify({ [AuthHttpEndpoint.ErrorKey]: error }))
+    }
+
+    private WriteBody(res: ServerResponse, status: number, body: string): void
+    {
+        if (res.writableEnded)
+        {
+            return
+        }
+        res.statusCode = status
+        res.setHeader(AuthHttpEndpoint.ContentTypeHeader, AuthHttpEndpoint.JsonContentType)
+        res.setHeader(AuthHttpEndpoint.CacheControlHeader, AuthHttpEndpoint.NoStore)
+        res.end(body)
+    }
+}

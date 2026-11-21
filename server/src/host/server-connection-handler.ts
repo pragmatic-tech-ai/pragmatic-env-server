@@ -1,0 +1,1431 @@
+import {
+    createMessageConnection, NullLogger, WebSocketMessageReader, WebSocketMessageWriter, LanguageProtocol, SolutionProtocol, ModelProtocol, ConnectorProtocol, AdminProtocol, CypherProtocol, PragmaticAppProtocol, GraphProtocol, StorageProtocol, BuildState,
+} from '@pragmatic-tech-ai/pragmatic-protocol'
+import { type MessageConnection, type IMessageSocket, type ActiveSolutionSummary, type SolutionSummaryDto, type ModelViewPageDto, type ModelViewParams, type GrantDto, type GrantMutationDto, type IdentityConfigDto, type SecurityModelDto, type SetSecurityModelParams, type TeamMemberDto, type AccountDto, type CreateAccountParams, type ServiceTokenSummaryDto, type IssueTokenParams, type TokenIssuedDto, type CypherQueryParams, type CypherQueryPageDto, type CypherExecuteParams, type CypherExecuteResultDto, type CypherModelListDto, type ConnectorReadParams, type Page, type EntityDto, type PragmaticAppSummaryDto, type GraphSummaryDto, type GraphLoadParamsDto, type GraphLoadedDto, type SolutionCreateParamsDto, type SolutionCreateResultDto, TeamMemberOrigin, ResponseError, ErrorCodes, DrainingError, ApplicationDeployProtocol, RunTestProtocol, AppDataProtocol, DataSharingProtocol, DataAssignmentProtocol, type CypherAppDeployParamsDto, type AppDeployResultDto, type AppWriteParams, type AppWriteResultDto, type AppWriteOpDto, type ShareParams, type ShareResultDto, type UnshareParams, type UnshareResultDto, type ListSharesParams, type ListSharesResultDto, type AssignParams, type AssignResultDto, type DataChangedPayload, type RequestType, type NotificationType } from '@pragmatic-tech-ai/pragmatic-protocol'
+import { ResourceRef, IdentityConfig, PresentedSecret, LocalAccountNotFoundError, InvalidSecurityModelError, MembershipOrigin, type AccessContext, type ISecurityModelConfig, type Grant, type Role, type LocalAccount, type ServiceTokenSummary, type ServiceTokenGrant, type TeamMembershipRow, TokenScopeGate } from '@pragmatic-tech-ai/pragmatic-identity'
+import type { IDisposable } from '@pragmatic-tech-ai/todl-runtime'
+import { Cypher } from '@pragmatic-tech-ai/pragmatic-graph'
+import type { SolutionManagerService } from '@pragmatic-tech-ai/todl'
+import { AuthoringTarget } from './solutions/authoring-target.js'
+import type { SourceChangeBridge } from './solutions/source-change-bridge.js'
+import { SolutionManifestRefresher } from './solutions/solution-manifest-refresher.js'
+import { RemoteStorageHandlers } from './storage/remote-storage-handlers.js'
+import { AuthoringStorageResolver } from './storage/authoring-storage-resolver.js'
+import { InvalidSolutionNameError, type EnvSolutionRoots } from './solutions/env-solution-roots.js'
+import type { ILanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
+import { InvalidParamsPrefix } from './invalid-params-prefix.js'
+import { PolicyGate } from './policy-gate.js'
+import { AuditSurface, type IAccessAuditSink, RateLimitGuard, RateLimitScope, PagingLimits } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import type { IEnvironmentDataService } from './environment/environment-data-service.js'
+import type { IEnvironmentDataChanges } from './environment/data-changed-push.js'
+import type { IGraphScope, IGraphScopeSource } from './engine/access-scope-source.js'
+import { AdminService, AdminSelfLockoutError, LastAdministratorError, AdminConfigMissingError, AdminTokenNotFoundError, ForeignRealmResourceError, AdminSecurityModelUnavailableError, AdminSecuritySettingRefusedError, UnknownTeamError } from './admin-service.js'
+import { SecurityModelWire } from './security-model-wire.js'
+import { SecurityCatalogReader } from './environment/security-catalog-reader.js'
+import { AdminEnums, AdminEnumError } from './admin-enums.js'
+import { EnvironmentPurpose } from '../environments/environment-purpose.js'
+import type { IDevGraphService } from './graphs/dev-graph-service.js'
+import type { IGraphModelView } from './engine/graph-model-view.js'
+import type { IGraphConnectorService } from './engine/engine-connector-service.js'
+import { EngineCypherQuery, type IGraphCypherQuery } from './engine/engine-cypher-query.js'
+import { GraphErrorCodes } from './graphs/graph-error-codes.js'
+import { DataSourceFailure } from './engine/data-source-failure.js'
+import { LoggerDispatchDiagnostics, type IDispatchDiagnostics } from './dispatch-diagnostics.js'
+import type { IEnvironmentGraphHost } from './environment/environment-engine-host.js'
+import type { PragmaticAppsRegistry } from './apps/pragmatic-apps-registry.js'
+import { CypherLimits } from '../config/cypher-limits.js'
+import { PageRequest } from './paging/page-request.js'
+import { BuildStateMapper } from './build-state-mapper.js'
+import { CypherParamConverter, CypherParamError } from './cypher/cypher-param-converter.js'
+import { AdapterPackError, AdapterPackErrorKind } from '@pragmatic-tech-ai/pragmatic-connectors-host'
+import type { ICypherExecuteRequest, IGraphCypherExecute } from './engine/graph-cypher-execute.js'
+import { trace, type Context } from '@opentelemetry/api'
+import type { RequestInstrumentation } from '../observability/request-instrumentation.js'
+
+/** One client connection: wires every JSON-RPC handler 1:1 to the engine services and pushes notifications. */
+export class ServerConnectionHandler
+{
+    private static readonly GenericInternalMessage = 'internal error'
+    private static readonly NoActiveSolutionError = 'no active solution after open'
+    private static readonly DefaultResourceKind = 'Realm'
+    private static readonly InvalidConfigField = 'config'
+    private static readonly SubjectField = 'subject'
+    private static readonly ResourcePathField = 'resourcePath'
+    private static readonly PackIdField = 'packId'
+    private static readonly ProviderSettingsField = 'providerSettings'
+    private static readonly GroupRoleMapField = 'groupRoleMap'
+    private static readonly ClaimsMappingField = 'claimsMapping'
+    private static readonly PrincipalIdField = 'principalId'
+    private static readonly TeamIdField = 'teamId'
+    private static readonly OutsideScopeMessage = "method is outside this credential's scope"
+    private static readonly EmailField = 'email'
+    private static readonly PasswordField = 'password'
+    private static readonly TokenRefField = 'tokenRef'
+    private static readonly PackNameField = 'name'
+    private static readonly ScopesField = 'scopes'
+    private static readonly ExpiresInField = 'expiresInSeconds'
+    private static readonly EmailTakenMessage = 'email already registered'
+    private static readonly PrincipalTakenMessage = 'principal already registered'
+    private static readonly AccountExistsMessage = 'account already exists'
+    private static readonly CypherField = 'cypher'
+    private static readonly PagedExplicitBoundsMessage = `${InvalidParamsPrefix.Text}paging cannot be combined with an explicit SKIP or LIMIT`
+    private static readonly ModelIdField = 'modelId'
+    private static readonly CypherUnavailableMessage = `${InvalidParamsPrefix.Text}cypher not available`
+    private static readonly BadSolutionNameMessage = `${InvalidParamsPrefix.Text}Name must be a valid solution name`
+    private static readonly NoSolutionRootsMessage = `${InvalidParamsPrefix.Text}this environment has no named-solution source area`
+    private static readonly BadSolutionIdMessage = `${InvalidParamsPrefix.Text}SolutionId must be a string`
+    private static readonly ModelViewUnavailableMessage = `${InvalidParamsPrefix.Text}model view not available`
+    private static readonly NotRuntimeMessage = 'operation requires a runtime environment'
+    private static readonly ConnectorsUnavailableMessage = 'connectors are not available on this connection'
+    private static readonly NotDevelopmentMessage = 'operation requires a development environment'
+    private static readonly GraphServiceUnavailableMessage = 'graph service is not available on this environment'
+    private static readonly EnvironmentGraphHostUnavailableMessage = 'environment graph host is not available on this environment'
+    private static readonly NameMismatchMessage = 'application manifest name does not match requested name: '
+    private static readonly AppNotLiveMessage = `${InvalidParamsPrefix.Text}no live application named `
+    private static readonly NoApplicationSelectedMessage = 'no application selected: call application/open first'
+    private static readonly ApplicationsUnavailableMessage = 'pragmatic applications are not available on this connection'
+    public static readonly RateLimitedCode = -32029
+    public static readonly CypherTimeoutCode = EngineCypherQuery.TimeoutCode
+    // -32031 (protocol DrainingError) and -32032 (protocol wire error) are reserved; -32033 is RevokedCode, distinct from the draining code Revoke() also sets; -32034 is protocol DataSourceUnavailableError (DataSourceFailure). -32040..-32045 are the graph error codes (GraphErrorCode).
+    public static readonly RevokedCode = -32033
+    private static readonly RevokedMessage = 'connection authorization has been revoked'
+
+    private readonly connection: MessageConnection
+    private readonly languageService: ILanguageService
+    private readonly manager: SolutionManagerService
+    private readonly accessContext: AccessContext
+    private readonly scopeGate: TokenScopeGate
+    private readonly gate: PolicyGate
+    /** The `connector/*` endpoints on the environment's graph engine (dev or environment, ruling S14). */
+    private readonly connectors: IGraphConnectorService | undefined
+    private readonly graphSubscription: IDisposable
+    private readonly buildStateSubscription: IDisposable
+    private readonly sourceChanges: SourceChangeBridge | undefined
+    /** Per-named-solution source roots; absent => storage/* serves the active solution only (Phase-2 behaviour). */
+    private readonly solutionRoots: EnvSolutionRoots | undefined
+    private readonly storageChangedSubscription: IDisposable | undefined
+    private readonly instrumentation: RequestInstrumentation | undefined
+    private readonly parent: Context | undefined
+    private readonly rateLimit: RateLimitGuard | undefined
+    private readonly admin: AdminService | undefined
+    /** cypher/query and cypher/models on the environment's graph engine (dev or environment, ruling S1). */
+    private readonly cypherQuery: IGraphCypherQuery | undefined
+    private readonly cypherLimits: CypherLimits
+    private readonly paging: PagingLimits
+    private readonly purpose: EnvironmentPurpose
+    /** cypher/execute on the environment's graph engine (dev DevCypherExecute or runtime EnvironmentCypherExecute). */
+    private readonly cypherExecute: IGraphCypherExecute | undefined
+    private readonly deployProvider: ((params: CypherAppDeployParamsDto) => Promise<AppDeployResultDto>) | undefined
+    private readonly applications: PragmaticAppsRegistry | undefined
+    /** data/write, the shares and assign on the environment engine (runtime environments only). */
+    private readonly data: IEnvironmentDataService | undefined
+    private readonly devGraphService: IDevGraphService | undefined
+    private readonly environmentGraphHost: IEnvironmentGraphHost | undefined
+    /** model/view and model/resources on the environment's graph (dev DevModelView or runtime EnvironmentModelView, ruling S15). */
+    private readonly modelView: IGraphModelView | undefined
+    /** The `data/changed` push of a runtime connection (ruling S16); undefined on dev environments and without a feed. */
+    private readonly dataSubscription: IDisposable | undefined
+    /** Where the dispatch reports the failures the client sees scrubbed (an unexpected error, a failed data source). */
+    private readonly diagnostics: IDispatchDiagnostics
+    /** The solution this connection's writes are attributed to; independent of the global ActiveSolution. */
+    private readonly authoringTarget: AuthoringTarget
+    private boundApp: PragmaticAppSummaryDto | undefined
+    private inFlight = 0
+    private draining = false
+    private revoked = false
+    private disposed = false
+
+    private constructor(connection: MessageConnection, languageService: ILanguageService, manager: SolutionManagerService, accessContext: AccessContext, connectors: IGraphConnectorService | undefined, cypherQuery: IGraphCypherQuery | undefined, instrumentation?: RequestInstrumentation, parent?: Context, audit?: IAccessAuditSink, rateLimit?: RateLimitGuard, admin?: AdminService, cypherLimits?: CypherLimits, purpose: EnvironmentPurpose = EnvironmentPurpose.Development, applications?: PragmaticAppsRegistry, data?: IEnvironmentDataService, paging?: PagingLimits, cypherExecute?: IGraphCypherExecute, deployProvider?: (params: CypherAppDeployParamsDto) => Promise<AppDeployResultDto>, devGraphService?: IDevGraphService, environmentGraphHost?: IEnvironmentGraphHost, modelView?: IGraphModelView, dataChanges?: IEnvironmentDataChanges, diagnostics?: IDispatchDiagnostics, sourceChanges?: SourceChangeBridge, solutionRoots?: EnvSolutionRoots)
+    {
+        this.diagnostics = diagnostics ?? new LoggerDispatchDiagnostics()
+        this.sourceChanges = sourceChanges
+        this.solutionRoots = solutionRoots
+        this.cypherLimits = cypherLimits ?? new CypherLimits()
+        this.paging = paging ?? new PagingLimits()
+        this.purpose = purpose
+        this.cypherExecute = cypherExecute
+        this.deployProvider = deployProvider
+        this.devGraphService = devGraphService
+        this.environmentGraphHost = environmentGraphHost
+        this.modelView = modelView
+        this.applications = applications
+        this.data = data
+        this.rateLimit = rateLimit
+        this.admin = admin
+        this.cypherQuery = cypherQuery
+        this.instrumentation = instrumentation
+        this.parent = parent
+        this.connectors = connectors
+        this.accessContext = accessContext
+        this.scopeGate = TokenScopeGate.ForContext(accessContext)
+        this.connection = connection
+        this.languageService = languageService
+        this.manager = manager
+        this.authoringTarget = new AuthoringTarget(() => manager.ActiveSolution?.Name)
+        this.gate = new PolicyGate(accessContext, () =>
+        {
+            const solution = manager.ActiveSolution
+            return solution === undefined ? [] : [solution.Name]
+        }, audit)
+        if (this.IsDevelopment())
+        {
+            this.RegisterLanguageHandlers()
+            this.RegisterSolutionHandlers()
+            this.RegisterStorageHandlers()
+        }
+        this.RegisterModelHandlers()
+        this.RegisterConnectorHandlers()
+        this.RegisterCypherHandlers()
+        this.RegisterApplicationHandlers()
+        this.RegisterGraphHandlers()
+        this.RegisterAppDataHandlers()
+        this.RegisterDataSharingHandlers()
+        this.RegisterDataAssignmentHandlers()
+        if (this.admin !== undefined)
+        {
+            this.RegisterAdminHandlers()
+        }
+        this.graphSubscription = languageService.GraphChanged.subscribe(async change =>
+        {
+            if (!this.gate.CanRead())
+            {
+                return
+            }
+            try
+            {
+                await connection.sendNotification(SolutionProtocol.GraphChanged, { memberIds: [...change.memberIds], fileIds: [...change.fileIds] })
+            }
+            catch
+            {
+                // fail-closed: a push to a closing connection must not crash the process
+            }
+        })
+        // ruling S16: runtime connections whose gate allows cypher/query get data/changed, re-checked per push
+        this.dataSubscription = this.purpose === EnvironmentPurpose.Runtime
+            ? dataChanges?.Subscribe(accessContext, payload => this.PushDataChanged(payload), () => this.PermitsDataChanged())
+            : undefined
+        this.buildStateSubscription = languageService.BuildStateChanged.subscribe(async state =>
+        {
+            if (!this.gate.CanRead())
+            {
+                return
+            }
+            try
+            {
+                await connection.sendNotification(SolutionProtocol.BuildStateChanged, { buildState: BuildStateMapper.ToWire(state) })
+            }
+            catch
+            {
+                // fail-closed: a push to a closing connection must not crash the process
+            }
+        })
+        this.storageChangedSubscription = this.IsDevelopment() ? sourceChanges?.Changed.subscribe(async change =>
+        {
+            if (!this.gate.CanRead())
+            {
+                return
+            }
+            try
+            {
+                await connection.sendNotification(StorageProtocol.Changed, { Kind: change.Kind, Path: change.Path, IsDirectory: change.IsDirectory })
+            }
+            catch
+            {
+                // fail-closed: a push to a closing connection must not crash the process
+            }
+        }) : undefined
+    }
+
+    /**
+     * The runtime-only Attach arguments: the application registry, the data/write, share and assign providers, deploy,
+     * the promote seam, `cypher/query` / `cypher/execute` / `connector/*` on the environment engine (rulings S1, S13,
+     * S14) and the `data/changed` feed (S16); all
+     * undefined unless this connection's effective purpose is Runtime and the server serves the runtime surface.
+     */
+    public static RuntimeAttachArgs(server: { ServesRuntime(): boolean; Applications(): PragmaticAppsRegistry; WriteForPragmaticApp(context: AccessContext, name: string, operations: readonly AppWriteOpDto[]): Promise<AppWriteResultDto>; ShareForPragmaticApp(context: AccessContext, name: string, params: ShareParams): Promise<ShareResultDto>; UnshareForPragmaticApp(context: AccessContext, name: string, params: UnshareParams): Promise<UnshareResultDto>; ListSharesForPragmaticApp(context: AccessContext, name: string, params: ListSharesParams): Promise<ListSharesResultDto>; AssignForPragmaticApp(context: AccessContext, name: string, params: AssignParams): Promise<AssignResultDto>; DeployApplication(params: CypherAppDeployParamsDto): Promise<AppDeployResultDto>; LoadEnvironmentGraph(params: GraphLoadParamsDto): Promise<GraphLoadedDto>; LoadedGraph(): Promise<GraphLoadedDto | null>; EnvironmentCypher(): IGraphCypherQuery; EnvironmentExecute(): IGraphCypherExecute; EnvironmentConnectors(): IGraphConnectorService; EnvironmentModelView(): IGraphModelView; EnvironmentScopes(): Promise<IGraphScopeSource>; DataChanges(): { Subscribe(scope: () => Promise<IGraphScope>, send: (payload: DataChangedPayload) => void, permits?: () => boolean): IDisposable } }, effectivePurpose: EnvironmentPurpose): { applications: PragmaticAppsRegistry | undefined; deployProvider: ((params: CypherAppDeployParamsDto) => Promise<AppDeployResultDto>) | undefined; environmentGraphHost: IEnvironmentGraphHost | undefined; cypherQuery: IGraphCypherQuery | undefined; cypherExecute: IGraphCypherExecute | undefined; data: IEnvironmentDataService | undefined; connectors: IGraphConnectorService | undefined; modelView: IGraphModelView | undefined; dataChanges: IEnvironmentDataChanges | undefined }
+    {
+        if (effectivePurpose !== EnvironmentPurpose.Runtime || !server.ServesRuntime())
+        {
+            return { applications: undefined, deployProvider: undefined, environmentGraphHost: undefined, cypherQuery: undefined, cypherExecute: undefined, data: undefined, connectors: undefined, modelView: undefined, dataChanges: undefined }
+        }
+        const data: IEnvironmentDataService = {
+            Write: (context, name, operations) => server.WriteForPragmaticApp(context, name, operations),
+            Share: (context, name, params) => server.ShareForPragmaticApp(context, name, params),
+            Unshare: (context, name, params) => server.UnshareForPragmaticApp(context, name, params),
+            ListShares: (context, name, params) => server.ListSharesForPragmaticApp(context, name, params),
+            Assign: (context, name, params) => server.AssignForPragmaticApp(context, name, params),
+        }
+        const dataChanges: IEnvironmentDataChanges = {
+            Subscribe: (context, send, permits) => server.DataChanges().Subscribe(async () => (await server.EnvironmentScopes()).ScopeFor(context), send, permits),
+        }
+        return { applications: server.Applications(), deployProvider: params => server.DeployApplication(params), environmentGraphHost: server, cypherQuery: server.EnvironmentCypher(), cypherExecute: server.EnvironmentExecute(), data, connectors: server.EnvironmentConnectors(), modelView: server.EnvironmentModelView(), dataChanges }
+    }
+
+    /** The development-only Attach arguments (the container-owned graph service; `cypher/query`, `cypher/execute`, `connector/*` and the model view on the dev graph engine); all undefined unless this connection's effective purpose is Development and the server serves the development surface. */
+    public static DevelopmentAttachArgs(server: { ServesDevelopment(): boolean; GraphService(): IDevGraphService; DevCypher(): IGraphCypherQuery; DevExecute(): IGraphCypherExecute; DevModelView(): IGraphModelView; DevConnectors(): IGraphConnectorService }, effectivePurpose: EnvironmentPurpose): { devGraphService: IDevGraphService | undefined; cypherQuery: IGraphCypherQuery | undefined; cypherExecute: IGraphCypherExecute | undefined; modelView: IGraphModelView | undefined; connectors: IGraphConnectorService | undefined }
+    {
+        if (effectivePurpose !== EnvironmentPurpose.Development || !server.ServesDevelopment())
+        {
+            return { devGraphService: undefined, cypherQuery: undefined, cypherExecute: undefined, modelView: undefined, connectors: undefined }
+        }
+        return { devGraphService: server.GraphService(), cypherQuery: server.DevCypher(), cypherExecute: server.DevExecute(), modelView: server.DevModelView(), connectors: server.DevConnectors() }
+    }
+
+    public static Attach(socket: IMessageSocket, languageService: ILanguageService, manager: SolutionManagerService, accessContext: AccessContext, connectors: IGraphConnectorService | undefined, cypherQuery: IGraphCypherQuery | undefined, instrumentation?: RequestInstrumentation, parent?: Context, audit?: IAccessAuditSink, rateLimit?: RateLimitGuard, admin?: AdminService, cypherLimits?: CypherLimits, purpose: EnvironmentPurpose = EnvironmentPurpose.Development, applications?: PragmaticAppsRegistry, data?: IEnvironmentDataService, paging?: PagingLimits, cypherExecute?: IGraphCypherExecute, deployProvider?: (params: CypherAppDeployParamsDto) => Promise<AppDeployResultDto>, devGraphService?: IDevGraphService, environmentGraphHost?: IEnvironmentGraphHost, modelView?: IGraphModelView, dataChanges?: IEnvironmentDataChanges, diagnostics?: IDispatchDiagnostics, sourceChanges?: SourceChangeBridge, solutionRoots?: EnvSolutionRoots): ServerConnectionHandler
+    {
+        const connection = createMessageConnection(new WebSocketMessageReader(socket), new WebSocketMessageWriter(socket), NullLogger)
+        const handler = new ServerConnectionHandler(connection, languageService, manager, accessContext, connectors, cypherQuery, instrumentation, parent, audit, rateLimit, admin, cypherLimits, purpose, applications, data, paging, cypherExecute, deployProvider, devGraphService, environmentGraphHost, modelView, dataChanges, diagnostics, sourceChanges, solutionRoots)
+        connection.listen()
+        return handler
+    }
+
+    private IsDevelopment(): boolean
+    {
+        return this.purpose === EnvironmentPurpose.Development
+    }
+
+    /** This connection's authoring target (which solution its writes are attributed to). */
+    public get Authoring(): AuthoringTarget
+    {
+        return this.authoringTarget
+    }
+
+    /** Count of JSON-RPC requests currently executing on this connection (for drain). */
+    public InFlight(): number
+    {
+        return this.inFlight
+    }
+
+    /** Puts the connection into draining state: new requests are rejected with the draining error; in-flight ones finish. */
+    public BeginDrain(): void
+    {
+        this.draining = true
+    }
+
+    /** Force-closes the connection because its authorization was revoked: later dispatches report the revoked code. */
+    public Revoke(): void
+    {
+        this.revoked = true
+        this.BeginDrain()
+        this.Dispose()
+    }
+
+    public Dispose(): void
+    {
+        if (this.disposed)
+        {
+            return
+        }
+        this.disposed = true
+        this.graphSubscription.dispose()
+        this.buildStateSubscription.dispose()
+        this.storageChangedSubscription?.dispose()
+        this.dataSubscription?.dispose()
+        this.connection.dispose()
+    }
+
+    /** True when this connection may receive `data/changed` now: open, and its gates allow cypher/query (S16). */
+    private PermitsDataChanged(): boolean
+    {
+        const method = CypherProtocol.Query.method
+        return !this.disposed && this.scopeGate.Allows(method) && this.gate.Permits(method)
+    }
+
+    private PushDataChanged(payload: DataChangedPayload): void
+    {
+        // re-checked at delivery: the gate may have changed while the scope resolved
+        if (!this.PermitsDataChanged())
+        {
+            return
+        }
+        // fail-closed: a push to a closing connection must not crash the process
+        this.connection.sendNotification(AppDataProtocol.Changed, payload).catch(() => {})
+    }
+
+    private EnforceRate(method: string): void
+    {
+        if (this.rateLimit === undefined)
+        {
+            return
+        }
+        const decision = this.rateLimit.Check(
+            { scope: RateLimitScope.Principal, environment: this.accessContext.Realm.Id, key: this.accessContext.Principal.Id },
+            { surface: AuditSurface.Rpc, environment: this.accessContext.Realm.Id, principal: this.accessContext.Principal.Id, methodOrPath: method, correlationId: trace.getActiveSpan()?.spanContext().traceId })
+        if (!decision.Allowed)
+        {
+            throw new ResponseError(ServerConnectionHandler.RateLimitedCode, RateLimitGuard.RejectedReason, { retryAfterMs: decision.RetryAfterMs })
+        }
+    }
+
+    private authorize(method: string): void
+    {
+        if (!this.scopeGate.Allows(method))
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.OutsideScopeMessage)
+        }
+        const decision = this.gate.Authorize(method)
+        if (!decision.Allowed)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, decision.Reason)
+        }
+    }
+
+    private Dispatch<R>(method: string, operation: () => R | Promise<R>): R | Promise<R>
+    {
+        // Defense-in-depth: reject with the specific revoked code if a request slips through after Revoke() ran but before the transport fully closed.
+        if (this.revoked)
+        {
+            throw new ResponseError(ServerConnectionHandler.RevokedCode, ServerConnectionHandler.RevokedMessage)
+        }
+        if (this.draining)
+        {
+            throw new ResponseError(DrainingError.Code, DrainingError.Message)
+        }
+        this.inFlight++
+        const settle = <T>(value: T): T =>
+        {
+            this.inFlight--
+            return value
+        }
+        const fail = (error: unknown): never =>
+        {
+            this.inFlight--
+            if (error instanceof ResponseError)
+            {
+                throw error
+            }
+            const graphError = GraphErrorCodes.ToResponseError(error)
+            if (graphError !== undefined)
+            {
+                throw graphError
+            }
+            const dataSource = DataSourceFailure.ToResponseError(error)
+            if (dataSource !== undefined)
+            {
+                this.diagnostics.DataSourceFailed(method, error)
+                throw dataSource
+            }
+            this.diagnostics.Unexpected(method, error)
+            throw new ResponseError(ErrorCodes.InternalError, ServerConnectionHandler.GenericInternalMessage)
+        }
+        try
+        {
+            const result = this.instrumentation === undefined
+                ? operation()
+                : this.instrumentation.Run({ method, environment: this.accessContext.Realm.Id, principal: this.accessContext.Principal.Id }, operation, this.parent)
+            return result instanceof Promise ? result.then(settle, fail) : settle(result)
+        }
+        catch (error)
+        {
+            return fail(error)
+        }
+    }
+
+    private guarded<P, R, E>(type: RequestType<P, R, E>, handler: (params: P) => R | Promise<R>): void
+    {
+        this.connection.onRequest(type, (params: P) => this.Dispatch(type.method, () =>
+        {
+            this.EnforceRate(type.method)
+            this.authorize(type.method)
+            return handler(params)
+        }))
+    }
+
+    private guardedNoParams(type: typeof SolutionProtocol.ActiveSolution, handler: () => ActiveSolutionSummary | null): void
+    private guardedNoParams(type: typeof SolutionProtocol.ListSolutions, handler: () => Promise<SolutionSummaryDto[]>): void
+    private guardedNoParams(type: typeof PragmaticAppProtocol.List, handler: () => PragmaticAppSummaryDto[] | Promise<PragmaticAppSummaryDto[]>): void
+    private guardedNoParams(type: typeof GraphProtocol.List, handler: () => GraphSummaryDto[] | Promise<GraphSummaryDto[]>): void
+    private guardedNoParams(type: typeof GraphProtocol.Loaded, handler: () => (GraphLoadedDto | null) | Promise<GraphLoadedDto | null>): void
+    private guardedNoParams(type: typeof CypherProtocol.Models, handler: () => Promise<CypherModelListDto>): void
+    private guardedNoParams(type: typeof SolutionProtocol.ActiveSolution | typeof SolutionProtocol.ListSolutions | typeof PragmaticAppProtocol.List | typeof GraphProtocol.List | typeof GraphProtocol.Loaded | typeof CypherProtocol.Models, handler: () => unknown): void
+    {
+        this.connection.onRequest(type as typeof SolutionProtocol.ActiveSolution, () => this.Dispatch(type.method, () =>
+        {
+            this.EnforceRate(type.method)
+            this.authorize(type.method)
+            return handler() as ActiveSolutionSummary | null
+        }))
+    }
+
+    private guardedNotification<P>(type: NotificationType<P>, handler: (params: P) => void): void
+    {
+        this.connection.onNotification(type, (params: P) =>
+        {
+            if (this.scopeGate.Allows(type.method) && this.gate.Authorize(type.method).Allowed)
+            {
+                handler(params)
+            }
+        })
+    }
+
+    private RegisterLanguageHandlers(): void
+    {
+        const service = this.languageService
+        this.guarded(LanguageProtocol.CompletionsAt, p => service.CompletionsAt(p.uri, p.position))
+        this.guarded(LanguageProtocol.HoverAt, p => service.HoverAt(p.uri, p.position))
+        this.guarded(LanguageProtocol.DefinitionAt, p => service.DefinitionAt(p.uri, p.position))
+        this.guarded(LanguageProtocol.ReferencesAt, p => service.ReferencesAt(p.uri, p.position, p.includeDeclaration))
+        this.guarded(LanguageProtocol.PrepareRename, p => service.PrepareRename(p.uri, p.position))
+        this.guarded(LanguageProtocol.RenameEdits, p => service.RenameEdits(p.uri, p.position, p.newName))
+        this.guarded(LanguageProtocol.DocumentSymbols, p => service.DocumentSymbols(p.uri))
+        this.guarded(LanguageProtocol.FoldingRanges, p => service.FoldingRanges(p.uri))
+        this.guarded(LanguageProtocol.WorkspaceSymbols, p => service.WorkspaceSymbols(p.query))
+        this.guarded(LanguageProtocol.SemanticTokens, p => service.SemanticTokens(p.uri))
+        this.guarded(LanguageProtocol.SignatureHelpAt, p => service.SignatureHelpAt(p.uri, p.position))
+        this.guarded(LanguageProtocol.CodeActions, p => service.CodeActions(p.uri, p.range, p.diagnostics as Parameters<ILanguageService['CodeActions']>[2]))
+        this.guarded(LanguageProtocol.FormatDocument, p => service.FormatDocument(p.uri))
+        this.guarded(LanguageProtocol.DiagnosticsFor, p => service.DiagnosticsFor(p.uri))
+        this.guardedNotification(LanguageProtocol.DidChange, p => void this.PublishDiagnostics(p.uri, p.text))
+    }
+
+    private RegisterModelHandlers(): void
+    {
+        this.guarded(ModelProtocol.ModelView, p => this.ProjectModelView(p))
+        this.guarded(ModelProtocol.Resources, p => this.RequireModelView().Resources(this.accessContext, p.nodeId))
+    }
+
+    private RegisterConnectorHandlers(): void
+    {
+        this.connection.onRequest(ConnectorProtocol.List, () => this.Dispatch(ConnectorProtocol.List.method, () =>
+        {
+            this.EnforceRate(ConnectorProtocol.List.method)
+            this.authorize(ConnectorProtocol.List.method)
+            return this.Connectors().List()
+        }))
+        this.connection.onRequest(ConnectorProtocol.Refresh, () => this.Dispatch(ConnectorProtocol.Refresh.method, async () =>
+        {
+            this.EnforceRate(ConnectorProtocol.Refresh.method)
+            this.authorize(ConnectorProtocol.Refresh.method)
+            await this.Connectors().Refresh()
+        }))
+        this.guarded(ConnectorProtocol.Prepare, p => this.Connectors().Prepare(p.modelId))
+        this.guarded(ConnectorProtocol.Read, p => this.Connectors().Read(this.accessContext, p, this.paging))
+        this.guarded(ConnectorProtocol.ReadPage, p => this.Connectors().ReadPage(this.accessContext, p, this.paging))
+        this.guarded(ConnectorProtocol.RefreshModel, p => this.Connectors().RefreshModel(p.modelId))
+        this.guarded(ConnectorProtocol.Decisions, p => this.Connectors().Decisions(this.accessContext, p.modelId, p.canonical))
+        this.guarded(ConnectorProtocol.WritePaged, p => this.Connectors().WritePaged(this.accessContext, p))
+        this.guarded(ConnectorProtocol.WriteBack, p => this.Connectors().WriteBack(this.accessContext, p))
+        this.guarded(ConnectorProtocol.Test, p => this.Connectors().Test(p.modelId, p.connectorName))
+    }
+
+    /** The environment's connector endpoints; InvalidRequest when this connection was attached without them. */
+    private Connectors(): IGraphConnectorService
+    {
+        if (this.connectors === undefined) throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.ConnectorsUnavailableMessage)
+        return this.connectors
+    }
+
+    private RegisterCypherHandlers(): void
+    {
+        this.guarded(CypherProtocol.Query, p => this.RunCypherQuery(p))
+        this.guarded(CypherProtocol.Execute, p => this.RunCypherExecute(p))
+        this.guardedNoParams(CypherProtocol.Models, () => this.RunCypherModels())
+    }
+
+    /** The model ids usable as modelId: the dev engine's models, or a runtime environment's delivered packages (ruling S12). */
+    public async RunCypherModels(): Promise<CypherModelListDto>
+    {
+        return { models: [...await this.RequireCypherQuery().Models()] }
+    }
+
+    private RegisterAppDataHandlers(): void
+    {
+        this.guarded(AppDataProtocol.Write, p => this.RunAppDataWrite(p))
+    }
+
+    private RegisterDataSharingHandlers(): void
+    {
+        this.guarded(DataSharingProtocol.Share, p => this.RunShare(p))
+        this.guarded(DataSharingProtocol.Unshare, p => this.RunUnshare(p))
+        this.guarded(DataSharingProtocol.ListShares, p => this.RunListShares(p))
+    }
+
+    public async RunShare(params: ShareParams): Promise<ShareResultDto>
+    {
+        this.EnsureRuntime()
+        if (this.boundApp === undefined || this.data === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NoApplicationSelectedMessage)
+        }
+        return this.data.Share(this.accessContext, this.boundApp.name, params)
+    }
+
+    public async RunUnshare(params: UnshareParams): Promise<UnshareResultDto>
+    {
+        this.EnsureRuntime()
+        if (this.boundApp === undefined || this.data === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NoApplicationSelectedMessage)
+        }
+        return this.data.Unshare(this.accessContext, this.boundApp.name, params)
+    }
+
+    public async RunListShares(params: ListSharesParams): Promise<ListSharesResultDto>
+    {
+        this.EnsureRuntime()
+        if (this.boundApp === undefined || this.data === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NoApplicationSelectedMessage)
+        }
+        return this.data.ListShares(this.accessContext, this.boundApp.name, params)
+    }
+
+    private RegisterDataAssignmentHandlers(): void
+    {
+        this.guarded(DataAssignmentProtocol.Assign, p => this.RunAssign(p))
+    }
+
+    public async RunAssign(params: AssignParams): Promise<AssignResultDto>
+    {
+        this.EnsureRuntime()
+        if (this.boundApp === undefined || this.data === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NoApplicationSelectedMessage)
+        }
+        return this.data.Assign(this.accessContext, this.boundApp.name, params)
+    }
+
+    public async RunDeploy(params: CypherAppDeployParamsDto): Promise<AppDeployResultDto>
+    {
+        this.EnsureRuntime()
+        if (this.deployProvider === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NotRuntimeMessage)
+        }
+        return this.deployProvider(params)
+    }
+
+    public async RunRunTestLoad(params: CypherAppDeployParamsDto): Promise<AppDeployResultDto>
+    {
+        // Same load path as deploy; the RunTest distinction (scope/policy/relay) is enforced elsewhere.
+        return this.RunDeploy(params)
+    }
+
+    public async RunAppDataWrite(params: AppWriteParams): Promise<AppWriteResultDto>
+    {
+        this.EnsureRuntime()
+        if (this.boundApp === undefined || this.data === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NoApplicationSelectedMessage)
+        }
+        const operations: readonly AppWriteOpDto[] = params?.operations ?? []
+        return this.data.Write(this.accessContext, this.boundApp.name, operations)
+    }
+
+    public async RunCypherQuery(params: CypherQueryParams): Promise<CypherQueryPageDto>
+    {
+        const source = this.RequireNonEmptyString(params?.cypher, ServerConnectionHandler.CypherField)
+        PageRequest.ValidatePageSize(params)
+        this.RefuseInvalidReadQuery(source, params)
+        let parameters: ReadonlyMap<string, Cypher.ParameterValue>
+        try
+        {
+            parameters = CypherParamConverter.ToMap(params.parameters)
+        }
+        catch (error)
+        {
+            if (error instanceof CypherParamError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, `${InvalidParamsPrefix.Text}${error.message}`)
+            }
+            throw error
+        }
+        const modelId = params.modelId === undefined ? undefined : this.RequireNonEmptyString(params.modelId, ServerConnectionHandler.ModelIdField)
+        // the engine scope decides every row and member, on both purposes; nothing is filtered or masked here
+        return this.RequireCypherQuery().Run(this.accessContext, {
+            Source: source,
+            Parameters: parameters,
+            CanonicalParameters: CypherParamConverter.Canonical(params.parameters),
+            ...(modelId === undefined ? {} : { ModelId: modelId }),
+            Page: { Params: params, Limits: this.paging, RowCap: this.cypherLimits.RowCap },
+            TimeoutMs: this.cypherLimits.TimeoutMs,
+            MaxVarLength: this.cypherLimits.MaxVarLength,
+        })
+    }
+
+    /**
+     * On a dev environment `modelId` is required and must be the round-trip-stable canonical model id (`<namespace>Model`): a
+     * non-canonical author name is renamed on first write (TODL emitter convention) and the id changes. On a runtime
+     * environment it is optional (a delivered package id, ruling S13).
+     */
+    public async RunCypherExecute(params: CypherExecuteParams): Promise<CypherExecuteResultDto>
+    {
+        params ??= {} as CypherExecuteParams
+        const source = this.RequireNonEmptyString(params?.cypher, ServerConnectionHandler.CypherField)
+        let parameters: ReadonlyMap<string, Cypher.ParameterValue>
+        try
+        {
+            parameters = CypherParamConverter.ToMap(params.parameters)
+        }
+        catch (error)
+        {
+            if (error instanceof CypherParamError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, `${InvalidParamsPrefix.Text}${error.message}`)
+            }
+            throw error
+        }
+        const modelId = params.modelId === undefined || params.modelId === null ? undefined : this.RequireNonEmptyString(params.modelId, ServerConnectionHandler.ModelIdField)
+        if (this.cypherExecute === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.CypherUnavailableMessage)
+        }
+        const request: ICypherExecuteRequest = { cypher: source, parameters, timeoutMs: this.cypherLimits.TimeoutMs, maxVarLength: this.cypherLimits.MaxVarLength }
+        if (params.expectedRevision !== undefined && params.expectedRevision !== null)
+        {
+            request.expectedRevision = params.expectedRevision
+        }
+        // the engine path reports engine syntax / semantic errors and timeouts as wire errors itself
+        return this.cypherExecute.Run(this.accessContext, modelId, request)
+    }
+
+    /**
+     * Refuses, before any graph is fetched, a well-formed WRITE query (it belongs on cypher/execute) and, on a paged request,
+     * a tail SKIP/LIMIT: paging translates to engine Skip/RowCap, so one in the text would double-offset. Judges ONLY the FINAL
+     * QueryPart.Projection: an interior WITH ... LIMIT is query-internal and intentionally allowed.
+     */
+    private RefuseInvalidReadQuery(source: string, params: CypherQueryParams): void
+    {
+        const paged = (params.cursor !== undefined && params.cursor !== null) || (params.pageSize !== undefined && params.pageSize !== null)
+        try
+        {
+            const model = new Cypher.CypherParser(source).Parse()
+            if (model.HasWrites())
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, EngineCypherQuery.ReadEndpointWriteMessage)
+            }
+            const last = model.Parts[model.Parts.length - 1]?.Projection
+            if (paged && last !== undefined && (last.Skip !== undefined || last.Limit !== undefined))
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.PagedExplicitBoundsMessage)
+            }
+        }
+        catch (error)
+        {
+            if (error instanceof Cypher.CypherSyntaxError || error instanceof Cypher.CypherSemanticError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, `${InvalidParamsPrefix.Text}${error.message}`)
+            }
+            throw error
+        }
+    }
+
+    private RequireModelView(): IGraphModelView
+    {
+        if (this.modelView === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.ModelViewUnavailableMessage)
+        }
+        return this.modelView
+    }
+
+    private RequireCypherQuery(): IGraphCypherQuery
+    {
+        if (this.cypherQuery === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.CypherUnavailableMessage)
+        }
+        return this.cypherQuery
+    }
+
+    private RegisterApplicationHandlers(): void
+    {
+        this.guardedNoParams(PragmaticAppProtocol.List, async () =>
+        {
+            this.EnsureRuntime()
+            const summaries = await this.RequireApplications().List()
+            return summaries.map(a => ({ name: a.name, version: a.version }))
+        })
+        this.guarded(ApplicationDeployProtocol.Deploy, p => this.RunDeploy(p))
+        this.guarded(RunTestProtocol.Load, p => this.RunRunTestLoad(p))
+        // S7: binds a LIVE app's name to the connection (data/write, shares and assign need it); no effect on the scope
+        this.guarded(PragmaticAppProtocol.Open, async p =>
+        {
+            this.EnsureRuntime()
+            const name = this.RequireNonEmptyString(p?.name, ServerConnectionHandler.PackNameField)
+            const app = await this.RequireApplications().LiveApplicationFor(name)
+            if (app === undefined)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.AppNotLiveMessage + name)
+            }
+            if (app.Manifest.name !== name)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.NameMismatchMessage + name)
+            }
+            this.boundApp = { name: app.Manifest.name, version: app.Manifest.version }
+            return this.boundApp
+        })
+    }
+
+    private RegisterGraphHandlers(): void
+    {
+        this.guarded(GraphProtocol.Create, async p =>
+        {
+            this.EnsureDevelopment()
+            return await this.RequireGraphService().CreateGraph(p)
+        })
+        this.guardedNoParams(GraphProtocol.List, async () =>
+        {
+            this.EnsureDevelopment()
+            return await this.RequireGraphService().ListGraphs()
+        })
+        this.guarded(GraphProtocol.Get, async p =>
+        {
+            this.EnsureDevelopment()
+            return await this.RequireGraphService().GetGraph(p)
+        })
+        this.guarded(GraphProtocol.Delete, async p =>
+        {
+            this.EnsureDevelopment()
+            await this.RequireGraphService().DeleteGraph(p)
+        })
+        this.guarded(GraphProtocol.Contribute, async p =>
+        {
+            this.EnsureDevelopment()
+            return await this.RequireGraphService().ContributeGraph(p)
+        })
+        this.guarded(GraphProtocol.Export, async p =>
+        {
+            this.EnsureDevelopment()
+            return await this.RequireGraphService().ExportGraph(p)
+        })
+        this.guarded(GraphProtocol.Load, async p =>
+        {
+            this.EnsureRuntime()
+            return await this.RequireEnvironmentGraphHost().LoadEnvironmentGraph(p)
+        })
+        this.guardedNoParams(GraphProtocol.Loaded, async () =>
+        {
+            this.EnsureRuntime()
+            return await this.RequireEnvironmentGraphHost().LoadedGraph()
+        })
+    }
+
+    private RequireGraphService(): IDevGraphService
+    {
+        if (this.devGraphService === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.GraphServiceUnavailableMessage)
+        }
+        return this.devGraphService
+    }
+
+    private RequireEnvironmentGraphHost(): IEnvironmentGraphHost
+    {
+        if (this.environmentGraphHost === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.EnvironmentGraphHostUnavailableMessage)
+        }
+        return this.environmentGraphHost
+    }
+
+    private EnsureRuntime(): void
+    {
+        if (this.purpose !== EnvironmentPurpose.Runtime)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NotRuntimeMessage)
+        }
+    }
+
+    private EnsureDevelopment(): void
+    {
+        if (this.purpose !== EnvironmentPurpose.Development)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NotDevelopmentMessage)
+        }
+    }
+
+    private RequireApplications(): PragmaticAppsRegistry
+    {
+        if (this.applications === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.ApplicationsUnavailableMessage)
+        }
+        return this.applications
+    }
+
+    private RegisterAdminHandlers(): void
+    {
+        const admin = this.admin as AdminService
+        this.guarded(AdminProtocol.ListGrants, async p => (await this.AdminCall(() => admin.ListGrants(this.RequireSubject(p.subject)))).map(g => this.ToGrantDto(g)))
+        this.guarded(AdminProtocol.GrantRole, async p =>
+        {
+            const { subject, role, resource } = this.ParseMutation(p)
+            await this.AdminCall(() => admin.GrantRole(this.actor(), subject, role, resource))
+            return { ok: true as const }
+        })
+        this.guarded(AdminProtocol.RevokeRole, async p =>
+        {
+            const { subject, role, resource } = this.ParseMutation(p)
+            await this.AdminCall(() => admin.RevokeRole(this.actor(), subject, role, resource))
+            return { ok: true as const }
+        })
+        this.connection.onRequest(AdminProtocol.GetConfig, () => this.Dispatch(AdminProtocol.GetConfig.method, async () =>
+        {
+            this.EnforceRate(AdminProtocol.GetConfig.method)
+            this.authorize(AdminProtocol.GetConfig.method)
+            return this.ToConfigDto(await this.AdminCall(() => admin.GetConfig()))
+        }))
+        this.guarded(AdminProtocol.SetConfig, async p =>
+        {
+            const config = this.ParseConfigDto(p)
+            await this.AdminCall(() => admin.SetConfig(this.actor(), config))
+            return { ok: true as const }
+        })
+        this.connection.onRequest(AdminProtocol.GetSecurityModel, () => this.Dispatch(AdminProtocol.GetSecurityModel.method, async () =>
+        {
+            this.EnforceRate(AdminProtocol.GetSecurityModel.method)
+            this.authorize(AdminProtocol.GetSecurityModel.method)
+            const model = await this.AdminCall(() => admin.GetSecurityModel())
+            return model === undefined ? undefined : SecurityModelWire.ToDto(model)
+        }))
+        this.guarded(AdminProtocol.SetSecurityModel, async p =>
+        {
+            const model = this.ParseSecurityModel(p)
+            await this.AdminCall(() => admin.SetSecurityModel(this.actor(), model))
+            return { ok: true as const }
+        })
+        this.connection.onRequest(AdminProtocol.GetSecurityCatalog, () => this.Dispatch(AdminProtocol.GetSecurityCatalog.method, async () =>
+        {
+            this.EnforceRate(AdminProtocol.GetSecurityCatalog.method)
+            this.authorize(AdminProtocol.GetSecurityCatalog.method)
+            return SecurityCatalogReader.Read(await this.AdminCall(() => admin.GetSecurityCatalog()))
+        }))
+        this.connection.onRequest(AdminProtocol.ListSecurityChanges, () => this.Dispatch(AdminProtocol.ListSecurityChanges.method, async () =>
+        {
+            this.EnforceRate(AdminProtocol.ListSecurityChanges.method)
+            this.authorize(AdminProtocol.ListSecurityChanges.method)
+            return this.AdminCall(() => admin.ListSecurityChanges())
+        }))
+        this.guarded(AdminProtocol.ListTeamMembers, async p =>
+        {
+            const teamId = this.RequireNonEmptyString(p?.teamId, ServerConnectionHandler.TeamIdField)
+            const rows = await this.AdminCall(() => admin.ListTeamMembers(teamId))
+            return rows.map(row => this.ToTeamMemberDto(row))
+        })
+        this.connection.onRequest(AdminProtocol.ListAccounts, () => this.Dispatch(AdminProtocol.ListAccounts.method, async () =>
+        {
+            this.EnforceRate(AdminProtocol.ListAccounts.method)
+            this.authorize(AdminProtocol.ListAccounts.method)
+            return (await this.AdminCall(() => admin.ListAccounts())).map(a => this.ToAccountDto(a))
+        }))
+        this.guarded(AdminProtocol.CreateAccount, async p =>
+        {
+            const { email, principalId } = this.ParseCreateAccount(p)
+            const presented = new PresentedSecret(this.RequireNonEmptyString(p?.password, ServerConnectionHandler.PasswordField))
+            try
+            {
+                await this.AdminCall(() => admin.CreateAccount(this.actor(), email, principalId, presented))
+            }
+            catch (error)
+            {
+                throw this.MapCreateError(error)
+            }
+            finally
+            {
+                presented.Clear()
+            }
+            return { ok: true as const }
+        })
+        this.guarded(AdminProtocol.DisableAccount, async p =>
+        {
+            const principalId = this.RequirePrincipalId(p?.principalId)
+            await this.AdminCall(() => admin.DisableAccount(this.actor(), principalId))
+            return { ok: true as const }
+        })
+        this.connection.onRequest(AdminProtocol.ListTokens, () => this.Dispatch(AdminProtocol.ListTokens.method, async () =>
+        {
+            this.EnforceRate(AdminProtocol.ListTokens.method)
+            this.authorize(AdminProtocol.ListTokens.method)
+            return (await this.AdminCall(() => admin.ListTokens())).map(t => this.ToServiceTokenSummaryDto(t))
+        }))
+        this.guarded(AdminProtocol.IssueToken, async p =>
+        {
+            const { principalId, scopes, expiresAt } = this.ParseIssueToken(p)
+            const issued = await this.AdminCall(() => admin.IssueToken(this.actor(), principalId, scopes, expiresAt))
+            return this.ToTokenIssuedDto(issued)
+        })
+        this.guarded(AdminProtocol.RevokeToken, async p =>
+        {
+            const tokenRef = this.RequireTokenRef(p?.tokenRef)
+            await this.AdminCall(() => admin.RevokeToken(this.actor(), tokenRef))
+            return { ok: true as const }
+        })
+        this.guarded(AdminProtocol.InvalidatePack, async p =>
+        {
+            const name = this.RequirePackName(p?.name)
+            await this.AdminCall(() => admin.InvalidatePack(this.actor(), name))
+            return { ok: true as const }
+        })
+        this.connection.onRequest(AdminProtocol.ListScriptAllowlist, () => this.Dispatch(AdminProtocol.ListScriptAllowlist.method, async () =>
+        {
+            this.EnforceRate(AdminProtocol.ListScriptAllowlist.method)
+            this.authorize(AdminProtocol.ListScriptAllowlist.method)
+            return { names: [...await this.AdminCall(() => admin.ListScriptAllowlist())] }
+        }))
+        this.guarded(AdminProtocol.AllowPackScripts, async p =>
+        {
+            const name = this.RequirePackName(p?.name)
+            await this.AdminCall(() => admin.AllowPackScripts(this.actor(), name))
+            return { ok: true as const }
+        })
+        this.guarded(AdminProtocol.DenyPackScripts, async p =>
+        {
+            const name = this.RequirePackName(p?.name)
+            await this.AdminCall(() => admin.DenyPackScripts(this.actor(), name))
+            return { ok: true as const }
+        })
+    }
+
+    private actor(): string
+    {
+        return this.accessContext.Principal.Id
+    }
+
+    private async AdminCall<T>(operation: () => Promise<T>): Promise<T>
+    {
+        try
+        {
+            return await operation()
+        }
+        catch (error)
+        {
+            if (error instanceof AdminSelfLockoutError || error instanceof LastAdministratorError || error instanceof AdminConfigMissingError || error instanceof LocalAccountNotFoundError || error instanceof AdminTokenNotFoundError || error instanceof ForeignRealmResourceError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidRequest, error.message)
+            }
+            if (error instanceof AdapterPackError && error.Kind === AdapterPackErrorKind.ProviderNotConfigured)
+            {
+                throw new ResponseError(ErrorCodes.InvalidRequest, error.message)
+            }
+            if (error instanceof AdminSecurityModelUnavailableError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidRequest, error.message)
+            }
+            // a refused setting names its fixed reason (the first issue); nothing was stored
+            if (error instanceof AdminSecuritySettingRefusedError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, InvalidParamsPrefix.Text + error.Issues[0].Message)
+            }
+            if (error instanceof UnknownTeamError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, InvalidParamsPrefix.Text + error.message)
+            }
+            if (error instanceof InvalidSecurityModelError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, InvalidParamsPrefix.Text + error.Issues[0].Message)
+            }
+            throw error
+        }
+    }
+
+    private InvalidParams(error: unknown): ResponseError<void>
+    {
+        if (error instanceof ResponseError)
+        {
+            return error
+        }
+        const field = error instanceof AdminEnumError ? error.Field : ServerConnectionHandler.InvalidConfigField
+        return new ResponseError(ErrorCodes.InvalidParams, `${InvalidParamsPrefix.Text}${field}`)
+    }
+
+    private ParseMutation(dto: GrantMutationDto): { subject: string, role: Role, resource: ResourceRef }
+    {
+        try
+        {
+            const subject = this.RequireSubject(dto.subject)
+            const role = AdminEnums.RoleFromName(dto.role)
+            const kind = AdminEnums.ResourceKindFromName(dto.resourceKind ?? ServerConnectionHandler.DefaultResourceKind)
+            const path = dto.resourcePath === undefined ? [] : this.RequireStringArray(dto.resourcePath, ServerConnectionHandler.ResourcePathField)
+            return { subject, role, resource: new ResourceRef(kind, this.accessContext.Realm.Id, path) }
+        }
+        catch (error)
+        {
+            throw this.InvalidParams(error)
+        }
+    }
+
+    private RequireSubject(value: unknown): string
+    {
+        return this.RequireNonEmptyString(value, ServerConnectionHandler.SubjectField)
+    }
+
+    private RequirePackName(name: unknown): string
+    {
+        const value = this.RequireNonEmptyString(name, ServerConnectionHandler.PackNameField)
+        if (value.trim().length === 0)
+        {
+            throw this.InvalidParams(new AdminEnumError(ServerConnectionHandler.PackNameField))
+        }
+        return value
+    }
+
+    private RequireNonEmptyString(value: unknown, field: string): string
+    {
+        if (typeof value !== 'string' || value.length === 0)
+        {
+            throw this.InvalidParams(new AdminEnumError(field))
+        }
+        return value
+    }
+
+    private RequireStringArray(value: unknown, field: string): string[]
+    {
+        if (!Array.isArray(value) || value.some(v => typeof v !== 'string'))
+        {
+            throw this.InvalidParams(new AdminEnumError(field))
+        }
+        return [...value]
+    }
+
+    private RequireStringRecord(value: unknown, field: string): Map<string, string>
+    {
+        const proto = typeof value === 'object' && value !== null ? Object.getPrototypeOf(value) : undefined
+        if (typeof value !== 'object' || value === null || Array.isArray(value) || (proto !== Object.prototype && proto !== null))
+        {
+            throw this.InvalidParams(new AdminEnumError(field))
+        }
+        const result = new Map<string, string>()
+        for (const [key, entry] of Object.entries(value))
+        {
+            if (typeof entry !== 'string')
+            {
+                throw this.InvalidParams(new AdminEnumError(field))
+            }
+            result.set(key, entry)
+        }
+        return result
+    }
+
+    private RequirePrincipalId(value: unknown): string
+    {
+        return this.RequireNonEmptyString(value, ServerConnectionHandler.PrincipalIdField)
+    }
+
+    private RequireTokenRef(value: unknown): string
+    {
+        return this.RequireNonEmptyString(value, ServerConnectionHandler.TokenRefField)
+    }
+
+    private ParseCreateAccount(dto: CreateAccountParams): { email: string, principalId: string }
+    {
+        try
+        {
+            const email = this.RequireNonEmptyString(dto?.email, ServerConnectionHandler.EmailField)
+            const principalId = this.RequireNonEmptyString(dto?.principalId, ServerConnectionHandler.PrincipalIdField)
+            // password is validated at the call site (it must be wrapped and cleared there).
+            return { email, principalId }
+        }
+        catch (error)
+        {
+            throw this.InvalidParams(error)
+        }
+    }
+
+    private ParseIssueToken(dto: IssueTokenParams): { principalId: string, scopes: string[], expiresAt: Date | null }
+    {
+        try
+        {
+            const principalId = this.RequireNonEmptyString(dto?.principalId, ServerConnectionHandler.PrincipalIdField)
+            const scopes = this.RequireStringArray(dto?.scopes, ServerConnectionHandler.ScopesField)
+            const expiresAt = this.ParseExpiry(dto?.expiresInSeconds)
+            return { principalId, scopes, expiresAt }
+        }
+        catch (error)
+        {
+            throw this.InvalidParams(error)
+        }
+    }
+
+    private ParseExpiry(value: unknown): Date | null
+    {
+        if (value === null || value === undefined)
+        {
+            return null
+        }
+        if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)
+        {
+            throw this.InvalidParams(new AdminEnumError(ServerConnectionHandler.ExpiresInField))
+        }
+        const expiresAt = new Date(Date.now() + value * 1000)
+        if (Number.isNaN(expiresAt.getTime()))
+        {
+            throw this.InvalidParams(new AdminEnumError(ServerConnectionHandler.ExpiresInField))
+        }
+        return expiresAt
+    }
+
+    private MapCreateError(error: unknown): unknown
+    {
+        if (error instanceof ResponseError)
+        {
+            return error
+        }
+        if (error instanceof Error && (error.message === ServerConnectionHandler.EmailTakenMessage || error.message === ServerConnectionHandler.PrincipalTakenMessage))
+        {
+            // duplicate email/principal from the registrar: a bad request; the raw message is not echoed.
+            return new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.AccountExistsMessage)
+        }
+        return error
+    }
+
+    private ToAccountDto(account: LocalAccount): AccountDto
+    {
+        return { principalId: account.PrincipalId, email: account.Email, disabled: account.Disabled }
+    }
+
+    private ToServiceTokenSummaryDto(summary: ServiceTokenSummary): ServiceTokenSummaryDto
+    {
+        return {
+            tokenRef: summary.TokenRef,
+            principalId: summary.PrincipalId,
+            scopes: [...summary.Scopes],
+            expiresAt: summary.ExpiresAt === null ? null : summary.ExpiresAt.toISOString(),
+            revoked: summary.Revoked,
+        }
+    }
+
+    private ToTokenIssuedDto(issued: { Grant: ServiceTokenGrant, Token: string }): TokenIssuedDto
+    {
+        return {
+            tokenRef: issued.Grant.TokenRef,
+            token: issued.Token,
+            principalId: issued.Grant.PrincipalId,
+            scopes: [...issued.Grant.Scopes],
+            expiresAt: issued.Grant.ExpiresAt === null ? null : issued.Grant.ExpiresAt.toISOString(),
+        }
+    }
+
+    private ToTeamMemberDto(row: TeamMembershipRow): TeamMemberDto
+    {
+        return { principalId: row.PrincipalId, origin: row.Origin === MembershipOrigin.Synced ? TeamMemberOrigin.Synced : TeamMemberOrigin.Manual }
+    }
+
+    private ToGrantDto(grant: Grant): GrantDto
+    {
+        return {
+            subject: grant.Subject,
+            role: AdminEnums.NameOfRole(grant.Role),
+            resourceKind: AdminEnums.NameOfResourceKind(grant.Resource.Kind),
+            resourcePath: [...grant.Resource.Path],
+        }
+    }
+
+    private ToConfigDto(config: IdentityConfig): IdentityConfigDto
+    {
+        const groupRoleMap: Record<string, string> = {}
+        for (const [group, role] of config.GroupRoleMap)
+        {
+            groupRoleMap[group] = AdminEnums.NameOfRole(role)
+        }
+        return {
+            packId: config.PackId,
+            delegationDepth: AdminEnums.NameOfDepth(config.DelegationDepth),
+            providerSettings: Object.fromEntries(config.ProviderSettings),
+            groupRoleMap,
+            claimsMapping: Object.fromEntries(config.ClaimsMapping),
+            ...(config.SecurityModel === undefined ? {} : { securityModel: SecurityModelWire.ToDto(config.SecurityModel) }),
+        }
+    }
+
+    private ParseConfigDto(dto: IdentityConfigDto): IdentityConfig
+    {
+        try
+        {
+            const packId = this.RequireNonEmptyString(dto.packId, ServerConnectionHandler.PackIdField)
+            const depth = AdminEnums.DepthFromName(dto.delegationDepth)
+            const providerSettings = this.RequireStringRecord(dto.providerSettings, ServerConnectionHandler.ProviderSettingsField)
+            const groupNames = this.RequireStringRecord(dto.groupRoleMap, ServerConnectionHandler.GroupRoleMapField)
+            const claimsMapping = this.RequireStringRecord(dto.claimsMapping, ServerConnectionHandler.ClaimsMappingField)
+            const groupRoles = new Map<string, Role>()
+            for (const [group, name] of groupNames)
+            {
+                try
+                {
+                    groupRoles.set(group, AdminEnums.RoleFromName(name))
+                }
+                catch
+                {
+                    throw this.InvalidParams(new AdminEnumError(ServerConnectionHandler.GroupRoleMapField))
+                }
+            }
+            // the setting's semantic checks are the admin service's (SetConfig checks it as SetSecurityModel does)
+            const securityModel = dto.securityModel === undefined ? undefined : SecurityModelWire.FromDto(dto.securityModel)
+            return new IdentityConfig(packId, depth, providerSettings, groupRoles, claimsMapping, securityModel)
+        }
+        catch (error)
+        {
+            throw this.InvalidParams(error)
+        }
+    }
+
+    /** The wire setting as the identity config (unknown action or level, or a non-array section: InvalidParams); the admin service validates it. */
+    private ParseSecurityModel(dto: SetSecurityModelParams): ISecurityModelConfig
+    {
+        try
+        {
+            return SecurityModelWire.FromDto(dto?.securityModel)
+        }
+        catch (error)
+        {
+            throw this.InvalidParams(error)
+        }
+    }
+
+    /** Both purposes: the attached IGraphModelView (dev structure + engine visibility, or the runtime engine projection). */
+    private ProjectModelView(params: ModelViewParams): Promise<ModelViewPageDto>
+    {
+        return this.RequireModelView().Page(this.accessContext, params?.memberId, { Params: params, Limits: this.paging })
+    }
+
+    private RegisterSolutionHandlers(): void
+    {
+        this.guarded(SolutionProtocol.OpenSolution, async p =>
+        {
+            this.EnsureDevelopment()
+            await this.manager.OpenSolution(p.location)
+            return this.SummariseActiveSolution()
+        })
+        this.guardedNoParams(SolutionProtocol.ActiveSolution, () => this.ActiveSolutionOrNull())
+        this.guardedNoParams(SolutionProtocol.ListSolutions, () => this.ListSolutions())
+        this.guarded(SolutionProtocol.SelectAuthoring, p =>
+        {
+            if (typeof p?.SolutionId !== 'string')
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.BadSolutionIdMessage)
+            }
+            this.authoringTarget.Select(p.SolutionId)
+            return this.AuthoringSummary(p.SolutionId)
+        })
+        this.guarded(SolutionProtocol.CreateSolution, p => this.CreateSolution(p))
+    }
+
+    /** Dev-only `solution/create`: create-or-replace the named solution's root, make it active and this connection's authoring target. */
+    private async CreateSolution(params: SolutionCreateParamsDto): Promise<SolutionCreateResultDto>
+    {
+        this.EnsureDevelopment()
+        if (typeof params?.Name !== 'string' || params.Name === '')
+        {
+            throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.BadSolutionNameMessage)
+        }
+        if (this.solutionRoots === undefined)
+        {
+            throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.NoSolutionRootsMessage)
+        }
+        let created: boolean
+        try
+        {
+            created = await this.solutionRoots.CreateOrReplace(params.Name)
+        }
+        catch (error)
+        {
+            if (error instanceof InvalidSolutionNameError)
+            {
+                throw new ResponseError(ErrorCodes.InvalidParams, ServerConnectionHandler.BadSolutionNameMessage)
+            }
+            throw error
+        }
+        await this.manager.OpenSolution(this.solutionRoots.LocationFor(params.Name))
+        this.authoringTarget.Select(params.Name)
+        return { Name: params.Name, Created: created }
+    }
+
+    /** Dev-only `storage/*`: the connection's authoring solution's source store (its own root, or the active solution's when none is selected), driven remotely; paths are confined to its root by {@link RemoteStorageHandlers}. */
+    private RegisterStorageHandlers(): void
+    {
+        const resolver = new AuthoringStorageResolver(this.authoringTarget, this.solutionRoots, () => this.manager.ActiveSolution?.Name, () => this.manager.ActiveSolution?.Storage, this.sourceChanges, this.solutionRoots === undefined ? undefined : new SolutionManifestRefresher(this.solutionRoots, this.manager))
+        const handlers = new RemoteStorageHandlers(() => resolver.Resolve(), () => resolver.Bridge(), () => resolver.ManifestReaction())
+        this.guarded(StorageProtocol.ReadText, p => handlers.ReadText(p))
+        this.guarded(StorageProtocol.ReadBytes, p => handlers.ReadBytes(p))
+        this.guarded(StorageProtocol.WriteText, p => handlers.WriteText(p))
+        this.guarded(StorageProtocol.WriteBytes, p => handlers.WriteBytes(p))
+        this.guarded(StorageProtocol.Exists, p => handlers.Exists(p))
+        this.guarded(StorageProtocol.Delete, p => handlers.Delete(p))
+        this.guarded(StorageProtocol.CreateDirectory, p => handlers.CreateDirectory(p))
+        this.guarded(StorageProtocol.Rename, p => handlers.Rename(p))
+        this.guarded(StorageProtocol.List, p => handlers.List(p))
+    }
+
+    /** Every named solution: the current one, each graph-slice contributor and each named solution in the env source area (deduplicated). */
+    private async ListSolutions(): Promise<SolutionSummaryDto[]>
+    {
+        const ids = new Set<string>()
+        const current = this.manager.ActiveSolution
+        if (current !== undefined)
+        {
+            ids.add(current.Name)
+        }
+        for (const id of await (this.devGraphService?.ListSolutionIds() ?? Promise.resolve([] as string[])))
+        {
+            ids.add(id)
+        }
+        for (const name of this.solutionRoots?.Names() ?? [])
+        {
+            ids.add(name)
+        }
+        return [...ids].map(id => ({ Name: id, Id: id }))
+    }
+
+    /** The current solution's full summary when it is the selected one. A non-current solution known to the env source area reports its real
+     *  manifest members and the composed graph's build state (it is compiled into that graph); an unknown id has no source here and reports
+     *  no members and a neutral Building state. */
+    private AuthoringSummary(solutionId: string): ActiveSolutionSummary
+    {
+        const active = this.ActiveSolutionOrNull()
+        if (active !== null && active.name === solutionId)
+        {
+            return active
+        }
+        // Names() is a single snapshot copy per request (not called in a loop), so no local capture is needed.
+        if (this.solutionRoots !== undefined && this.solutionRoots.Names().includes(solutionId))
+        {
+            return {
+                name: solutionId,
+                members: this.solutionRoots.MembersOf(solutionId).map(m => ({ id: m.Ref.path, type: m.Ref.type })),
+                buildState: BuildStateMapper.ToWire(this.languageService.BuildState),
+            }
+        }
+        return { name: solutionId, members: [], buildState: BuildState.Building }
+    }
+
+    private async PublishDiagnostics(uri: string, text: string): Promise<void>
+    {
+        try
+        {
+            this.languageService.DidChange(uri, text)
+            const diagnostics = await this.languageService.DiagnosticsFor(uri)
+            if (this.gate.CanRead())
+            {
+                await this.connection.sendNotification(LanguageProtocol.PublishDiagnostics, { uri, diagnostics })
+            }
+        }
+        catch
+        {
+            // fail closed: a failed wire op pushes nothing and never escapes as an unhandled rejection
+        }
+    }
+
+    private SummariseActiveSolution(): ActiveSolutionSummary
+    {
+        const summary = this.ActiveSolutionOrNull()
+        if (summary === null)
+        {
+            throw new ResponseError(ErrorCodes.InvalidRequest, ServerConnectionHandler.NoActiveSolutionError)
+        }
+        return summary
+    }
+
+    private ActiveSolutionOrNull(): ActiveSolutionSummary | null
+    {
+        const solution = this.manager.ActiveSolution
+        if (solution === undefined)
+        {
+            return null
+        }
+        return {
+            name: solution.Name,
+            members: solution.Members.ToArray().map(m => ({ id: m.Ref.path, type: m.Ref.type })),
+            buildState: BuildStateMapper.ToWire(this.languageService.BuildState),
+        }
+    }
+}

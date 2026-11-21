@@ -1,0 +1,206 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
+import { mkdtempSync, cpSync, mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { WebSocket } from 'ws'
+import { Grant, Role, ResourceRef, ResourceKind, type IdentityStoreSet } from '@pragmatic-tech-ai/pragmatic-identity'
+import { PragmaticClient, WsMessageSocket } from '@pragmatic-tech-ai/pragmatic-protocol'
+import { RedisEnvironmentOwnership } from '../../environments/redis-environment-ownership.js'
+import { MachineTls, type MachineTlsRef } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { WorkerHost } from '../worker-host.js'
+import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
+import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { NodePlatform } from '../../platform/node-platform.js'
+
+class RecordingPlatform extends NodePlatform
+{
+    public identityRoots: string[] = []
+
+    public override CreateIdentityStores(identityRoot: string, masterKey: Buffer): Promise<IdentityStoreSet>
+    {
+        this.identityRoots.push(identityRoot)
+        return super.CreateIdentityStores(identityRoot, masterKey)
+    }
+}
+
+class WorkerFixture
+{
+    public static readonly KeyEnv = 'PS_WORKER_KEY'
+
+    public static TlsRef(): MachineTlsRef
+    {
+        const dir = join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'tls')
+        return { certFile: join(dir, 'server.pem'), keyFile: join(dir, 'server.key'), caFile: join(dir, 'ca.pem') }
+    }
+
+    public static ClientTls(): MachineTlsRef
+    {
+        const dir = join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'tls')
+        return { certFile: join(dir, 'client.pem'), keyFile: join(dir, 'client.key'), caFile: join(dir, 'ca.pem') }
+    }
+
+    public static Start(...environmentIds: string[]): { baseDir: string }
+    {
+        const baseDir = mkdtempSync(join(tmpdir(), 'ps-wh-'))
+        const fixture = join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'sample-solution')
+        for (const id of environmentIds)
+        {
+            mkdirSync(join(baseDir, id), { recursive: true })
+            cpSync(fixture, join(baseDir, id, 'solution'), { recursive: true })
+        }
+        process.env[WorkerFixture.KeyEnv] = randomBytes(32).toString('base64')
+        return { baseDir }
+    }
+
+    public static Provisioning(...environmentIds: string[]): InMemoryEnvironmentProvisioning
+    {
+        const entries = new Map<string, EnvironmentProvisioning>()
+        for (const id of environmentIds)
+        {
+            entries.set(id, { displayName: id })
+        }
+        return new InMemoryEnvironmentProvisioning(entries)
+    }
+
+    public static Options(baseDir: string, provisioning: InMemoryEnvironmentProvisioning)
+    {
+        return { host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: WorkerFixture.KeyEnv }, provisioning, tls: WorkerFixture.TlsRef() }
+    }
+
+    public static async TokenFor(worker: WorkerHost, environmentId: string): Promise<string>
+    {
+        const server = await worker.RegistryForTest().ServerFor(environmentId)
+        const pack = await server.Pack()
+        await pack.Grants.Save(new Grant(environmentId, Role.Admin, new ResourceRef(ResourceKind.Realm, environmentId, [])))
+        return (await pack.Tokens.Issue(server.Realm(), environmentId, [], null)).Token
+    }
+
+    public static Dial(address: { host: string; port: number }, environmentId: string, bearer: string | null, withClientCert: boolean): WebSocket
+    {
+        const client = withClientCert ? MachineTls.Client(WorkerFixture.ClientTls()) : undefined
+        const headers: Record<string, string> = { 'x-pragmatic-environment': environmentId }
+        if (bearer !== null)
+        {
+            headers['authorization'] = `Bearer ${bearer}`
+        }
+        return new WebSocket(`wss://${address.host}:${address.port}/`, { key: client?.key, cert: client?.cert, ca: client?.ca, rejectUnauthorized: true, headers })
+    }
+
+    public static readonly SettleMs = 300
+
+    public static async Settle(): Promise<void>
+    {
+        await new Promise<void>(resolve => setTimeout(resolve, WorkerFixture.SettleMs))
+    }
+
+    public static Cleanup(baseDir: string): void
+    {
+        rmSync(baseDir, { recursive: true, force: true })
+        delete process.env[WorkerFixture.KeyEnv]
+    }
+}
+
+test('a gateway (valid client cert + environment + bearer) attaches and opens the environment solution', async () =>
+{
+    const { baseDir } = WorkerFixture.Start('t1')
+    const worker = await WorkerHost.StartAsync(WorkerFixture.Options(baseDir, WorkerFixture.Provisioning('t1')))
+    try
+    {
+        const token = await WorkerFixture.TokenFor(worker, 't1')
+        const ws = WorkerFixture.Dial(worker.Address(), 't1', token, true)
+        await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject) })
+        const client = PragmaticClient.CreateOverSocket(new WsMessageSocket(ws))
+        const summary = await client.OpenSolution(join(baseDir, 't1', 'solution'))
+        assert.equal(summary.members.length, 1)
+        await client.DisposeAsync()
+    }
+    finally
+    {
+        await WorkerFixture.Settle()
+        await worker.DisposeAsync()
+        WorkerFixture.Cleanup(baseDir)
+    }
+})
+
+test('a connection without a trusted client cert fails the TLS handshake', async () =>
+{
+    const { baseDir } = WorkerFixture.Start('t1')
+    const worker = await WorkerHost.StartAsync(WorkerFixture.Options(baseDir, WorkerFixture.Provisioning('t1')))
+    try
+    {
+        const token = await WorkerFixture.TokenFor(worker, 't1')
+        await assert.rejects(() => new Promise<void>((resolve, reject) =>
+        {
+            const ws = WorkerFixture.Dial(worker.Address(), 't1', token, false)
+            ws.on('open', () => { ws.close(); resolve() })
+            ws.on('error', reject)
+        }))
+    }
+    finally
+    {
+        await worker.DisposeAsync()
+        WorkerFixture.Cleanup(baseDir)
+    }
+})
+
+test('a bad bearer is rejected by the worker (ws closes without a usable connection)', async () =>
+{
+    const { baseDir } = WorkerFixture.Start('t1')
+    const worker = await WorkerHost.StartAsync(WorkerFixture.Options(baseDir, WorkerFixture.Provisioning('t1')))
+    try
+    {
+        const ws = WorkerFixture.Dial(worker.Address(), 't1', 'not-a-real-token', true)
+        await new Promise<void>(resolve => { ws.on('close', () => resolve()); ws.on('error', () => resolve()) })
+        assert.ok(ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING)
+    }
+    finally
+    {
+        await worker.DisposeAsync()
+        WorkerFixture.Cleanup(baseDir)
+    }
+})
+
+test('a platform passed in the options is forwarded into the per-environment server', async () =>
+{
+    const { baseDir } = WorkerFixture.Start('t1')
+    const platform = new RecordingPlatform()
+    const worker = await WorkerHost.StartAsync({ ...WorkerFixture.Options(baseDir, WorkerFixture.Provisioning('t1')), platform })
+    try
+    {
+        await WorkerFixture.TokenFor(worker, 't1')
+        assert.equal(platform.identityRoots.length, 1)
+        assert.ok(platform.identityRoots[0].includes('t1'))
+    }
+    finally
+    {
+        await worker.DisposeAsync()
+        WorkerFixture.Cleanup(baseDir)
+    }
+})
+
+test('gated-live: a worker rejects an environment already owned by another holder (ownership backstop, Review Focus 1)', async t =>
+{
+    const url = process.env.PRAGMATIC_TEST_REDIS_URL
+    if (url === undefined)
+    {
+        t.skip('PRAGMATIC_TEST_REDIS_URL not set')
+        return
+    }
+    const { baseDir } = WorkerFixture.Start('t1')
+    const other = new RedisEnvironmentOwnership(url, 'other-holder')
+    await other.Start()
+    assert.equal(await other.Acquire('t1'), true)
+    const worker = await WorkerHost.StartAsync({ ...WorkerFixture.Options(baseDir, WorkerFixture.Provisioning('t1')), redisUrl: url })
+    try
+    {
+        await assert.rejects(() => worker.RegistryForTest().ServerFor('t1'), /EnvironmentOwnedElsewhere/)
+    }
+    finally
+    {
+        await worker.DisposeAsync()
+        await other.ReleaseAll()
+        WorkerFixture.Cleanup(baseDir)
+    }
+})

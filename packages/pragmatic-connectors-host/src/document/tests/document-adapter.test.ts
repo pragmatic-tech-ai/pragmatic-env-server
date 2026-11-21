@@ -1,0 +1,386 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { QueryCompareOp, WriteAtomicity, WriteConcurrency, WriteFailureKind, WriteOperationKind } from "@pragmatic-tech-ai/todl";
+import { DocumentAdapter } from "../document-adapter.js";
+import type { DocumentFindOptions, IDocumentSession } from "../document-session.js";
+import { FakeDocumentSession, TransactionalFakeDocumentSession } from "../../testing/fake-document-session.js";
+import { describeDataSourceAdapter, describeInsertingAdapter } from "../../testing/adapter-conformance.js";
+
+class DocumentFixture
+{
+    public static readonly Collection = "Customer";
+    public static readonly IdField = "id";
+    public static readonly Label = "label";
+    public static readonly Tier = "tier";
+    public static readonly Gold = "gold";
+    public static readonly Rev = "rev";
+    public static readonly OperatorKey = "$where";
+    public static readonly DottedKey = "a.b";
+
+    public static Make(): DocumentAdapter
+    {
+        const session = new FakeDocumentSession();
+        session.Seed(DocumentFixture.Collection, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme" }]);
+        return new DocumentAdapter(session);
+    }
+}
+
+describeDataSourceAdapter("DocumentAdapter (fake session)", () => DocumentFixture.Make());
+
+const Events = "events";
+const MongoId = "_id";
+
+/** A fake session that hands its assigned _ids out in DESCENDING order, so the id-value order is the reverse of the
+ *  request order -- used to prove the adapter correlates each insert to its Ref, not to the outcome's position or key. */
+class ReorderingInsertSession extends FakeDocumentSession
+{
+    private static readonly IdPrefix = "evt-";
+    private next = 9;
+
+    public override async Insert(collection: string, doc: Record<string, unknown>): Promise<unknown>
+    {
+        const id = ReorderingInsertSession.IdPrefix + String(this.next--);
+        const bucket = this.store.get(collection) ?? new Map<string, Record<string, unknown>>();
+        this.store.set(collection, bucket);
+        bucket.set(id, { ...doc, [MongoId]: id });
+        return id;
+    }
+}
+
+describeInsertingAdapter("DocumentAdapter (fake session)", () => new DocumentAdapter(new FakeDocumentSession()),
+    { Source: Events, IdKey: MongoId, FailFields: { [FakeDocumentSession.FailField]: "1" } });
+
+test("document advertises CanAssignKeys iff its session can insert", () =>
+{
+    assert.equal(new DocumentAdapter(new FakeDocumentSession()).CanAssignKeys, true);
+    const noInsert: IDocumentSession = {
+        Find: async () => [], Upsert: async () => {}, Delete: async () => false,
+    };
+    assert.equal(new DocumentAdapter(noInsert).CanAssignKeys, false);
+});
+
+test("mongo insert needs the _id key: any other id key is Unsupported, nothing assigned", async () =>
+{
+    const adapter = new DocumentAdapter(new FakeDocumentSession());
+    const result = await adapter.Apply({
+        Source: Events, IdKey: DocumentFixture.IdField, Concurrency: WriteConcurrency.LastWriteWins, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Insert, Key: null, Ref: "r1", Fields: { [DocumentFixture.Label]: "x" } }],
+    });
+    assert.equal(result.Applied, 0);
+    assert.equal(result.Assigned, undefined);
+    assert.equal(result.Failures.length, 1);
+    assert.equal(result.Failures[0]!.Kind, WriteFailureKind.Unsupported);
+});
+
+test("bulk insert correlates by ref even when the source returns its assigned ids reordered", async () =>
+{
+    const adapter = new DocumentAdapter(new ReorderingInsertSession());
+    const result = await adapter.Apply({
+        Source: Events, IdKey: MongoId, Concurrency: WriteConcurrency.LastWriteWins, Atomicity: WriteAtomicity.Sequential,
+        Operations: [
+            { Kind: WriteOperationKind.Insert, Key: null, Ref: "r1", Fields: { [DocumentFixture.Label]: "a" } },
+            { Kind: WriteOperationKind.Insert, Key: null, Ref: "r2", Fields: { [DocumentFixture.Label]: "b" } },
+            { Kind: WriteOperationKind.Insert, Key: null, Ref: "r3", Fields: { [DocumentFixture.Label]: "c" } }],
+    });
+    assert.equal(result.Applied, 3);
+    // Source of truth: each stored doc's label -> its assigned _id, read back from the collection.
+    const stored = await adapter.Query({ Source: Events, Fields: [MongoId, DocumentFixture.Label] });
+    const idByLabel = new Map(stored.map(d => [d[DocumentFixture.Label], d[MongoId]]));
+    const byRef = new Map(result.Assigned!.map(a => [a.Ref, a.Key]));
+    assert.equal(new Set(byRef.values()).size, 3);
+    // Each Ref correlates to its OWN doc's assigned _id.
+    assert.equal(byRef.get("r1"), idByLabel.get("a"));
+    assert.equal(byRef.get("r2"), idByLabel.get("b"));
+    assert.equal(byRef.get("r3"), idByLabel.get("c"));
+    // The source handed ids out in REVERSE of request order, so ordering the outcomes by Key gives the reverse of
+    // the requests -- a position/key-based correlation would mis-assign; only keying by Ref is correct.
+    const byKeyAscending = [...result.Assigned!].sort((a, b) => (String(a.Key) < String(b.Key) ? -1 : 1)).map(a => a.Ref);
+    assert.deepEqual(byKeyAscending, ["r3", "r2", "r1"]);
+});
+
+test("an ObjectId assigned _id is reported as its hex string", async () =>
+{
+    const hex = "507f1f77bcf86cd799439011";
+    const session: IDocumentSession = {
+        Find: async () => [], Upsert: async () => {}, Delete: async () => false,
+        Insert: async () => ({ toHexString: () => hex }),
+    };
+    const result = await new DocumentAdapter(session).Apply({
+        Source: Events, IdKey: MongoId, Concurrency: WriteConcurrency.LastWriteWins, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Insert, Key: null, Ref: "r1", Fields: {} }],
+    });
+    assert.deepEqual(result.Assigned, [{ Ref: "r1", Key: hex }]);
+});
+
+test("Neq over a null field never returns the null-field row (SQL-null, not Mongo $ne:null)", async () =>
+{
+    const session = new FakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [
+        { [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme", [DocumentFixture.Tier]: null },
+        { [DocumentFixture.IdField]: "c2", [DocumentFixture.Label]: "Globex", [DocumentFixture.Tier]: DocumentFixture.Gold }]);
+    const rows = await new DocumentAdapter(session).Query(
+        { Source: DocumentFixture.Collection, Fields: [DocumentFixture.IdField],
+            Where: { All: [{ Field: DocumentFixture.Tier, Op: QueryCompareOp.Neq, Value: DocumentFixture.Gold }] } });
+    assert.deepEqual(rows, []);
+});
+
+test("an optimistic version mismatch is a conflict, not applied, never thrown", async () =>
+{
+    const session = new FakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme", [DocumentFixture.Rev]: "v1" }]);
+    const result = await new DocumentAdapter(session).Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField, VersionField: DocumentFixture.Rev,
+        Concurrency: WriteConcurrency.Optimistic, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Upsert, Key: "c1", Fields: { [DocumentFixture.Label]: "x" }, Version: "stale" }] });
+    assert.equal(result.Applied, 0);
+    assert.match(result.Failures[0]!.Reason, /version/);
+});
+
+test("an upsert with an operator-prefixed field key is rejected", async () =>
+{
+    const adapter = new DocumentAdapter(new FakeDocumentSession());
+    await assert.rejects(adapter.Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField,
+        Concurrency: WriteConcurrency.LastWriteWins, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Upsert, Key: "c1", Fields: { [DocumentFixture.OperatorKey]: "x" } }] }));
+});
+
+test("a query filtering on an operator-prefixed or dotted field is rejected", async () =>
+{
+    const adapter = new DocumentAdapter(new FakeDocumentSession());
+    for (const field of [DocumentFixture.OperatorKey, DocumentFixture.DottedKey])
+    {
+        await assert.rejects(adapter.Query({ Source: DocumentFixture.Collection, Fields: [DocumentFixture.IdField],
+            Where: { All: [{ Field: field, Op: QueryCompareOp.Eq, Value: "x" }] } }));
+    }
+});
+
+test("the adapter itself rejects an invalid Source on Query and an invalid IdKey or Source on Apply", async () =>
+{
+    const adapter = new DocumentAdapter(new FakeDocumentSession());
+    for (const source of [DocumentFixture.OperatorKey, DocumentFixture.DottedKey])
+    {
+        await assert.rejects(adapter.Query({ Source: source, Fields: [DocumentFixture.IdField] }));
+        await assert.rejects(adapter.Apply({ Source: source, IdKey: DocumentFixture.IdField,
+            Concurrency: WriteConcurrency.LastWriteWins, Atomicity: WriteAtomicity.Sequential, Operations: [] }));
+    }
+    await assert.rejects(adapter.Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.OperatorKey,
+        Concurrency: WriteConcurrency.LastWriteWins, Atomicity: WriteAtomicity.Sequential, Operations: [] }));
+});
+
+test("absent doc applies (optimistic)", async () =>
+{
+    // The key is absent (ReadVersionState -> Exists:false): optimistic insert is writable regardless of op.Version.
+    const session = new FakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme" }]);
+    const result = await new DocumentAdapter(session).Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField,
+        VersionField: DocumentFixture.Rev, Concurrency: WriteConcurrency.Optimistic, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Upsert, Key: "c2", Fields: { [DocumentFixture.Label]: "Globex" } }] });
+    assert.equal(result.Applied, 1);
+    assert.equal(result.Failures.length, 0);
+    const rows = await new DocumentAdapter(session).Query({ Source: DocumentFixture.Collection, Fields: [DocumentFixture.IdField, DocumentFixture.Label] });
+    assert.deepEqual(rows.find(r => r[DocumentFixture.IdField] === "c2"), { [DocumentFixture.IdField]: "c2", [DocumentFixture.Label]: "Globex" });
+});
+
+test("present + matching version applies", async () =>
+{
+    const session = new FakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme", [DocumentFixture.Rev]: "v1" }]);
+    const result = await new DocumentAdapter(session).Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField,
+        VersionField: DocumentFixture.Rev, Concurrency: WriteConcurrency.Optimistic, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Upsert, Key: "c1", Fields: { [DocumentFixture.Label]: "Acme 2" }, Version: "v1" }] });
+    assert.equal(result.Applied, 1);
+    assert.equal(result.Failures.length, 0);
+});
+
+test("present + mismatched version is a Conflict", async () =>
+{
+    const session = new FakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme", [DocumentFixture.Rev]: "v1" }]);
+    const result = await new DocumentAdapter(session).Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField,
+        VersionField: DocumentFixture.Rev, Concurrency: WriteConcurrency.Optimistic, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Upsert, Key: "c1", Fields: { [DocumentFixture.Label]: "x" }, Version: "v2" }] });
+    assert.equal(result.Applied, 0);
+    assert.equal(result.Failures.length, 1);
+    assert.equal(result.Failures[0]!.Kind, WriteFailureKind.Conflict);
+});
+
+test("present + unversioned is a Conflict (fail-closed) — the #7 case", async () =>
+{
+    // The row exists but carries no version field; a present-but-unversioned record must never be
+    // silently overwritten -- even when op.Version matches nothing, it is a Conflict, not an apply.
+    const session = new FakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme" }]);
+    const result = await new DocumentAdapter(session).Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField,
+        VersionField: DocumentFixture.Rev, Concurrency: WriteConcurrency.Optimistic, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Upsert, Key: "c1", Fields: { [DocumentFixture.Label]: "x" }, Version: "v1" }] });
+    assert.equal(result.Applied, 0);
+    assert.equal(result.Failures.length, 1);
+    assert.equal(result.Failures[0]!.Kind, WriteFailureKind.Conflict);
+    // The stored doc is untouched.
+    const rows = await new DocumentAdapter(session).Query({ Source: DocumentFixture.Collection, Fields: [DocumentFixture.IdField, DocumentFixture.Label] });
+    assert.deepEqual(rows, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme" }]);
+});
+
+test("LastWriteWins overwrites an unversioned present doc", async () =>
+{
+    const session = new FakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme" }]);
+    const result = await new DocumentAdapter(session).Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField,
+        VersionField: DocumentFixture.Rev, Concurrency: WriteConcurrency.LastWriteWins, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Upsert, Key: "c1", Fields: { [DocumentFixture.Label]: "Overwritten" }, Version: "v9" }] });
+    assert.equal(result.Applied, 1);
+    assert.equal(result.Failures.length, 0);
+    const rows = await new DocumentAdapter(session).Query({ Source: DocumentFixture.Collection, Fields: [DocumentFixture.IdField, DocumentFixture.Label] });
+    assert.deepEqual(rows, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Overwritten" }]);
+});
+
+test("Transactional rolls back on a failure when supported", async () =>
+{
+    // c1 matches its version (would apply); c2 is present-but-unversioned (fail-closed Conflict).
+    // The Conflict aborts the whole transaction, so even c1's update is rolled back and nothing applies.
+    const session = new TransactionalFakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [
+        { [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme", [DocumentFixture.Rev]: "v1" },
+        { [DocumentFixture.IdField]: "c2", [DocumentFixture.Label]: "Globex" }]);
+    const result = await new DocumentAdapter(session).Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField,
+        VersionField: DocumentFixture.Rev, Concurrency: WriteConcurrency.Optimistic, Atomicity: WriteAtomicity.Transactional,
+        Operations: [
+            { Kind: WriteOperationKind.Upsert, Key: "c1", Fields: { [DocumentFixture.Label]: "Acme 2" }, Version: "v1" },
+            { Kind: WriteOperationKind.Upsert, Key: "c2", Fields: { [DocumentFixture.Label]: "x" }, Version: "v1" }] });
+    assert.equal(result.Applied, 0);
+    assert.equal(result.Failures.length, 1);
+    assert.equal(result.Failures[0]!.Key, "c2");
+    assert.equal(result.Failures[0]!.Kind, WriteFailureKind.Conflict);
+    // c1 was rolled back to its seeded label.
+    const rows = await new DocumentAdapter(session).Query({ Source: DocumentFixture.Collection, Fields: [DocumentFixture.IdField, DocumentFixture.Label] });
+    assert.equal(rows.find(r => r[DocumentFixture.IdField] === "c1")![DocumentFixture.Label], "Acme");
+});
+
+test("Transactional returns Unsupported when the session can't transact", async () =>
+{
+    const session = new FakeDocumentSession();
+    session.Seed(DocumentFixture.Collection, [{ [DocumentFixture.IdField]: "c1", [DocumentFixture.Label]: "Acme" }]);
+    const result = await new DocumentAdapter(session).Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField,
+        Concurrency: WriteConcurrency.LastWriteWins, Atomicity: WriteAtomicity.Transactional,
+        Operations: [
+            { Kind: WriteOperationKind.Upsert, Key: "c1", Fields: { [DocumentFixture.Label]: "x" } },
+            { Kind: WriteOperationKind.Upsert, Key: "c2", Fields: { [DocumentFixture.Label]: "y" } }] });
+    assert.equal(result.Applied, 0);
+    assert.equal(result.Failures.length, 2);
+    assert.deepEqual(result.Failures.map(f => f.Kind), [WriteFailureKind.Unsupported, WriteFailureKind.Unsupported]);
+    assert.deepEqual(result.Failures.map(f => f.Key), ["c1", "c2"]);
+});
+
+type RecordedFind = { Collection: string; Filter: Record<string, unknown>; Options?: unknown };
+
+class PagingFixture
+{
+    public static readonly Key = "id";
+    public static readonly After = "k5";
+    public static readonly K6 = "k6";
+    public static readonly K7 = "k7";
+
+    public static Recorder(docs: Record<string, unknown>[]): { Calls: RecordedFind[]; Session: FakeDocumentSession }
+    {
+        const calls: RecordedFind[] = [];
+        const session = new FakeDocumentSession();
+        session.Find = async (collection, filter, options) =>
+        {
+            calls.push({ Collection: collection, Filter: filter, Options: options });
+            return docs;
+        };
+        return { Calls: calls, Session: session };
+    }
+
+    public static Request(): { Source: string; Fields: string[]; OrderKey: string; Where: { All: { Field: string; Op: QueryCompareOp; Value: string }[] } }
+    {
+        return { Source: DocumentFixture.Collection, Fields: [PagingFixture.Key, DocumentFixture.Label], OrderKey: PagingFixture.Key,
+            Where: { All: [{ Field: DocumentFixture.Tier, Op: QueryCompareOp.Eq, Value: DocumentFixture.Gold }] } };
+    }
+}
+
+test("DocumentAdapter.CanPage is true", () =>
+{
+    assert.equal(new DocumentAdapter(new FakeDocumentSession()).CanPage, true);
+});
+
+test("QueryPage merges the base filter with a strict $gt keyset term, sorts ascending and limits", async () =>
+{
+    const rec = PagingFixture.Recorder([{ id: PagingFixture.K6, label: "a", tier: "gold" }, { id: PagingFixture.K7, label: "b" }]);
+    const slice = await new DocumentAdapter(rec.Session).QueryPage(PagingFixture.Request(), { After: PagingFixture.After, Limit: 2 });
+    assert.equal(rec.Calls.length, 1);
+    assert.deepEqual(rec.Calls[0]!.Filter, { $and: [{ [DocumentFixture.Tier]: { $eq: DocumentFixture.Gold } }] });
+    assert.deepEqual(rec.Calls[0]!.Options, { Sort: { [PagingFixture.Key]: 1 }, After: { Field: PagingFixture.Key, Value: PagingFixture.After }, Limit: 2 });
+    assert.equal(slice.NextAfter, PagingFixture.K7);
+});
+
+test("QueryPage first page carries no $gt term but still sorts and limits", async () =>
+{
+    const rec = PagingFixture.Recorder([{ id: "k1", label: "a" }]);
+    await new DocumentAdapter(rec.Session).QueryPage(PagingFixture.Request(), { Limit: 2 });
+    assert.deepEqual(rec.Calls[0]!.Filter, { $and: [{ [DocumentFixture.Tier]: { $eq: DocumentFixture.Gold } }] });
+    assert.deepEqual(rec.Calls[0]!.Options, { Sort: { [PagingFixture.Key]: 1 }, After: undefined, Limit: 2 });
+});
+
+test("QueryPage short slice has no NextAfter", async () =>
+{
+    const rec = PagingFixture.Recorder([{ id: PagingFixture.K6, label: "a", tier: "gold" }]);
+    const slice = await new DocumentAdapter(rec.Session).QueryPage(PagingFixture.Request(), { After: PagingFixture.After, Limit: 2 });
+    assert.equal(slice.Records.length, 1);
+    assert.equal(slice.NextAfter, undefined);
+});
+
+test("QueryPage full slice whose last order key is null/undefined has no NextAfter", async () =>
+{
+    const recNull = PagingFixture.Recorder([{ id: PagingFixture.K6 }, { id: null }]);
+    assert.equal((await new DocumentAdapter(recNull.Session).QueryPage(PagingFixture.Request(), { Limit: 2 })).NextAfter, undefined);
+    const recMissing = PagingFixture.Recorder([{ id: PagingFixture.K6 }, { label: "x" }]);
+    assert.equal((await new DocumentAdapter(recMissing.Session).QueryPage(PagingFixture.Request(), { Limit: 2 })).NextAfter, undefined);
+});
+
+test("QueryPage defaults the order key to the first field", async () =>
+{
+    const rec = PagingFixture.Recorder([]);
+    await new DocumentAdapter(rec.Session).QueryPage({ Source: DocumentFixture.Collection, Fields: [DocumentFixture.Label] }, { Limit: 3 });
+    assert.deepEqual((rec.Calls[0]!.Options as { Sort: unknown }).Sort, { label: 1 });
+});
+
+test("QueryPage rejects a non-positive or non-integer Limit and an absent order key", async () =>
+{
+    const adapter = new DocumentAdapter(PagingFixture.Recorder([]).Session);
+    await assert.rejects(adapter.QueryPage(PagingFixture.Request(), { Limit: 0 }), /positive integer/);
+    await assert.rejects(adapter.QueryPage(PagingFixture.Request(), { Limit: 1.5 }), /positive integer/);
+    await assert.rejects(adapter.QueryPage({ Source: DocumentFixture.Collection, Fields: [] }, { Limit: 1 }), /order/);
+});
+
+/** A session that cannot probe versions (no ReadVersionState), like a store without per-record versions. */
+class UnversionedDocumentSession implements IDocumentSession
+{
+    private readonly inner = new FakeDocumentSession();
+
+    public Find(collection: string, filter: Record<string, unknown>, options?: DocumentFindOptions): Promise<readonly Record<string, unknown>[]>
+    {
+        return this.inner.Find(collection, filter, options);
+    }
+
+    public Upsert(collection: string, idField: string, key: unknown, doc: Record<string, unknown>): Promise<void>
+    {
+        return this.inner.Upsert(collection, idField, key, doc);
+    }
+
+    public Delete(collection: string, idField: string, key: unknown): Promise<boolean>
+    {
+        return this.inner.Delete(collection, idField, key);
+    }
+}
+
+test("over a session without ReadVersionState, CanVersion is false and an optimistic batch is Unsupported, not thrown", async () =>
+{
+    const adapter = new DocumentAdapter(new UnversionedDocumentSession());
+    assert.equal(adapter.CanVersion, false);
+    const result = await adapter.Apply({ Source: DocumentFixture.Collection, IdKey: DocumentFixture.IdField, VersionField: DocumentFixture.Rev,
+        Concurrency: WriteConcurrency.Optimistic, Atomicity: WriteAtomicity.Sequential,
+        Operations: [{ Kind: WriteOperationKind.Delete, Key: "c1", Fields: {}, Version: "v1" }] });
+    assert.equal(result.Applied, 0);
+    assert.equal(result.Failures.length, 1);
+    assert.equal(result.Failures[0]!.Kind, WriteFailureKind.Unsupported);
+});

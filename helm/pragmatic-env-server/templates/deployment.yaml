@@ -1,0 +1,181 @@
+{{- if not .Values.cluster.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pragmatic-server.fullname" . }}
+  labels:
+    {{- include "pragmatic-server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  {{- if .Values.persistence.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pragmatic-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pragmatic-server.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- if .Values.observability.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.observability.metrics.port | quote }}
+        prometheus.io/path: {{ .Values.observability.metrics.path | quote }}
+        {{- end }}
+    spec:
+      {{- if .Values.drain.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.drain.terminationGracePeriodSeconds }}
+      {{- end }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: pragmatic-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            {{- if .Values.observability.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.observability.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: PRAGMATIC_BASE_DIR
+              value: {{ .Values.baseDir | quote }}
+            - name: PRAGMATIC_PORT
+              value: {{ .Values.service.port | quote }}
+            - name: PRAGMATIC_DEPLOYMENT_MODE
+              value: {{ .Values.deploymentMode | quote }}
+            - name: PRAGMATIC_ENVIRONMENTS_FILE
+              value: /cfg/environments.json
+            - name: PRAGMATIC_MASTER_KEY_B64_ENV
+              value: PRAGMATIC_MASTER_KEY
+            - name: PRAGMATIC_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pragmatic-server.fullname" . }}
+                  key: PRAGMATIC_MASTER_KEY
+            {{- if or .Values.secrets.provisioned .Values.secrets.provisionedExistingSecret }}
+            - name: PRAGMATIC_PROVISIONED_SECRETS_FILE
+              value: /run/secrets/provisioned/secrets.json
+            {{- end }}
+            {{- if or .Values.redis.url .Values.redis.existingSecret }}
+            - name: PRAGMATIC_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.existingSecret | default (include "pragmatic-server.fullname" .) }}
+                  key: {{ .Values.redis.secretKey | default "redis-url" }}
+            - name: PRAGMATIC_REPLICA_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
+            {{- if .Values.clientTls.existingSecret }}
+            - name: PRAGMATIC_CLIENT_TLS_CERT_FILE
+              value: {{ .Values.clientTls.mountPath }}/tls.crt
+            - name: PRAGMATIC_CLIENT_TLS_KEY_FILE
+              value: {{ .Values.clientTls.mountPath }}/tls.key
+            - name: PRAGMATIC_CLIENT_TLS_CA_FILE
+              value: {{ .Values.clientTls.mountPath }}/ca.crt
+            {{- end }}
+            {{- if .Values.observability.metrics.enabled }}
+            - name: PRAGMATIC_METRICS_PORT
+              value: {{ .Values.observability.metrics.port | quote }}
+            {{- end }}
+            {{- if .Values.observability.otlp.existingSecret }}
+            - name: PRAGMATIC_OTLP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.observability.otlp.existingSecret }}
+                  key: {{ .Values.observability.otlp.secretKey }}
+            {{- else if .Values.observability.otlp.endpoint }}
+            - name: PRAGMATIC_OTLP_ENDPOINT
+              value: {{ .Values.observability.otlp.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.observability.otlp.protocol }}
+            - name: PRAGMATIC_OTLP_PROTOCOL
+              value: {{ .Values.observability.otlp.protocol | quote }}
+            {{- end }}
+            {{- if .Values.observability.otlp.metrics }}
+            - name: PRAGMATIC_OTLP_METRICS
+              value: "true"
+            {{- end }}
+            {{- if .Values.drain.timeoutMs }}
+            - name: PRAGMATIC_DRAIN_TIMEOUT_MS
+              value: {{ .Values.drain.timeoutMs | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          {{- if .Values.drain.preStopSeconds }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ .Values.drain.preStopSeconds }}"]
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /cfg
+              readOnly: true
+            {{- if or .Values.secrets.provisioned .Values.secrets.provisionedExistingSecret }}
+            - name: provisioned-secrets
+              mountPath: /run/secrets/provisioned
+              readOnly: true
+            {{- end }}
+            {{- if .Values.clientTls.existingSecret }}
+            - name: client-tls
+              mountPath: {{ .Values.clientTls.mountPath }}
+              readOnly: true
+            {{- end }}
+            - name: data
+              mountPath: {{ .Values.baseDir }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "pragmatic-server.fullname" . }}
+        {{- if or .Values.secrets.provisioned .Values.secrets.provisionedExistingSecret }}
+        - name: provisioned-secrets
+          secret:
+            secretName: {{ .Values.secrets.provisionedExistingSecret | default (include "pragmatic-server.fullname" .) }}
+            items:
+              - key: {{ .Values.secrets.provisionedSecretKey }}
+                path: secrets.json
+        {{- end }}
+        {{- if .Values.clientTls.existingSecret }}
+        - name: client-tls
+          secret:
+            secretName: {{ .Values.clientTls.existingSecret }}
+            defaultMode: 0440
+        {{- end }}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "pragmatic-server.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
