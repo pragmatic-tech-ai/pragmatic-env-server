@@ -1,6 +1,10 @@
 # Local dev with docker compose
 
-**Legacy:** `docker-compose.yml` and `docker/docker-compose.cluster.yml` build `pragmatic-server/docker/Dockerfile` from the parent folder of a pragmatic-server checkout (archived; the pre-split sibling workspace), not from this repository: they are kept as they were for reference. They run the server for local development; the Dockerfile needs the BuildKit secret `npmrc` for private dependencies. To run this repository's image, use `ghcr.io/pragmatic-tech-ai/pragmatic-env-server` (or the image the root `docker-bake.hcl` builds) with the same environment and mounts; its worker command is `node server/dist/bin/pragmatic-workerd.js`.
+`docker-compose.yml` runs the released image `ghcr.io/pragmatic-tech-ai/pragmatic-env-server` (tag
+`PRAGMATIC_ENV_SERVER_TAG`, default `0.1.0`); to run a local build, bake it with `docker buildx bake` and tag it the same.
+`docker/docker-compose.cluster.yml` runs two workers from that image (`node server/dist/bin/pragmatic-workerd.js`) and
+the gateway from `ghcr.io/pragmatic-tech-ai/pragmatic-env-gateway` (tag `PRAGMATIC_ENV_GATEWAY_TAG`). Pulling a private
+image needs `docker login ghcr.io` with a token that can read the package.
 
 ## 1. Generate a dev master key
 
@@ -16,7 +20,7 @@ or, without a POSIX shell:
 
 ## 2. Start and stop
 
-    docker compose up --build
+    docker compose up
     docker compose down
 
 State lives in the named volume `pragmatic-data` (mounted at `/data`). Use `docker compose down -v` to wipe it.

@@ -1,8 +1,7 @@
 services:
   pragmatic-server:
-    build:
-      context: ..
-      dockerfile: pragmatic-server/docker/Dockerfile
+    # The released image (or one baked locally with `docker buildx bake` and tagged the same).
+    image: ghcr.io/pragmatic-tech-ai/pragmatic-env-server:${PRAGMATIC_ENV_SERVER_TAG:-0.1.0}
     ports:
       - "8080:8080"
     environment:

@@ -13,9 +13,8 @@ Seeded from pragmatic-server@2a2e8138 (dev-kit A3 Task 9); the map is [ARCHITECT
 - `helm/pragmatic-env-server` — the Kubernetes chart (chart name `pragmatic-server`, unchanged).
 - `Dockerfile`, `docker-bake.hcl`, `closure.json`, `.github/workflows/` — rendered by `pragmatic-container-template`
   (`@pragmatic-tech-ai/pragmatic-release-toolkit`): the image of record.
-- `docker/Dockerfile`, `docker/docker-compose.cluster.yml` and `docker-compose.yml` are the legacy pre-split build,
-  kept as they were for reference: they build an archived pragmatic-server checkout from its parent folder, **not this
-  repository** (`docker/README.md`, `docker/compose-README.md`).
+- `docker-compose.yml` and `docker/docker-compose.cluster.yml` run the released images (env-server; the cluster file adds
+  two workers and the pragmatic-env-gateway image) for local development (`docker/compose-README.md`).
 
 ## Build and test
 

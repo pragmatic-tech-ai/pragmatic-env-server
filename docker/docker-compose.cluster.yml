@@ -1,15 +1,15 @@
 # Illustrative gateway + worker split for local testing. Supply mTLS PEM files (./tls) and a master key
-# (./master.key) out of band -- never commit them. Run: docker compose -f docker-compose.cluster.yml up --build
+# (./master.key) out of band -- never commit them. Run: docker compose -f docker-compose.cluster.yml up
+# Images: the released pragmatic-env-server (workers) and pragmatic-env-gateway (gateway); override the tags with
+# PRAGMATIC_ENV_SERVER_TAG / PRAGMATIC_ENV_GATEWAY_TAG.
 services:
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
   worker1:
-    build:
-      context: ..
-      dockerfile: pragmatic-server/docker/Dockerfile
-    command: ["node", "dist/bin/pragmatic-workerd.js"]
+    image: ghcr.io/pragmatic-tech-ai/pragmatic-env-server:${PRAGMATIC_ENV_SERVER_TAG:-0.1.0}
+    command: ["node", "server/dist/bin/pragmatic-workerd.js"]
     environment:
       PRAGMATIC_BASE_DIR: /data
       PRAGMATIC_PORT: "8443"
@@ -29,10 +29,8 @@ services:
     depends_on:
       - redis
   worker2:
-    build:
-      context: ..
-      dockerfile: pragmatic-server/docker/Dockerfile
-    command: ["node", "dist/bin/pragmatic-workerd.js"]
+    image: ghcr.io/pragmatic-tech-ai/pragmatic-env-server:${PRAGMATIC_ENV_SERVER_TAG:-0.1.0}
+    command: ["node", "server/dist/bin/pragmatic-workerd.js"]
     environment:
       PRAGMATIC_BASE_DIR: /data
       PRAGMATIC_PORT: "8443"
@@ -52,10 +50,8 @@ services:
     depends_on:
       - redis
   gateway:
-    build:
-      context: ..
-      dockerfile: pragmatic-server/docker/Dockerfile
-    command: ["node", "dist/bin/pragmatic-gatewayd.js"]
+    # The gateway is its own image (pragmatic-env-gateway); its entrypoint is pragmatic-gatewayd.
+    image: ghcr.io/pragmatic-tech-ai/pragmatic-env-gateway:${PRAGMATIC_ENV_GATEWAY_TAG:-0.1.0}
     ports:
       - "8080:8080"
     environment:

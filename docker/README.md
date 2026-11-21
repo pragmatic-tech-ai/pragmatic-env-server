@@ -1,23 +1,14 @@
-# pragmatic-server container image (legacy sibling-workspace build)
+# pragmatic-env-server container image
 
-The image of record is the repository root `Dockerfile` (rendered by pragmatic-container-template, built by CI from published packages; see the root README). This folder keeps the pre-split build as it was, and **it does not build this repository**: it needs the parent folder of an (archived) pragmatic-server checkout with all its siblings, and builds the whole sibling workspace from source (hermetic, multi-stage). The build context must be the parent workspace directory (`architecture-agent/`), which holds all sibling packages.
+The image is built from the repository root `Dockerfile` and `docker-bake.hcl` (rendered by
+pragmatic-container-template, baked by CI from published packages: `docker buildx bake` runs the `components` step,
+then the image; see the root README). This folder holds only the compose files' companions (`environments.example.json`,
+`compose-README.md`, `docker-compose.cluster.yml`); the pre-split sibling-workspace build is gone (it built an archived
+pragmatic-server checkout, not this repository).
 
-## Build
-
-From the parent workspace directory:
-
-    DOCKER_BUILDKIT=1 docker build -f pragmatic-server/docker/Dockerfile --secret id=npmrc,src=/path/to/.npmrc -t pragmatic-server .
-
-### Private registry
-
-Several `@pragmatic-tech-ai/*` dependencies (for example mural) are hosted on GitHub Packages (npm.pkg.github.com) and need a token with `read:packages`. Create a scoped `.npmrc` OUTSIDE the repo and never commit it:
-
-    @pragmatic-tech-ai:registry=https://npm.pkg.github.com
-    //npm.pkg.github.com/:_authToken=<your PACKAGES_TOKEN>
-
-The token is supplied by reference at build time as a BuildKit secret (`--secret id=npmrc,...`), mounted only during each `npm install` step. It is never baked into an image layer, and `**/.npmrc` is excluded from the build context. CI passes the token from the `PACKAGES_TOKEN` secret (wired in the CI task). Without the secret the build still starts but fails at the first package that needs a private dependency.
-
-BuildKit reads `pragmatic-server/docker/Dockerfile.dockerignore`, which excludes `node_modules`, `dist`, VCS metadata and logs so the context is source plus manifests.
+The image runs `node server/dist/bin/pragmatic-serverd.js` from `/workspace/pragmatic-env-server`; a worker runs from
+the same image with `node server/dist/bin/pragmatic-workerd.js`. The gateway is its own image,
+`ghcr.io/pragmatic-tech-ai/pragmatic-env-gateway`.
 
 ## Run
 
