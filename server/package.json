@@ -41,7 +41,7 @@
     "@pragmatic-tech-ai/pragmatic-realm-custom": "^0.17.2",
     "@pragmatic-tech-ai/pragmatic-realm-gcp": "^0.17.2",
     "@pragmatic-tech-ai/todl": "^0.66.3",
-    "@pragmatic-tech-ai/todl-runtime": "^0.7.0",
+    "@pragmatic-tech-ai/todl-runtime": "^0.7.1",
     "jose": "^6.0.0",
     "pg": "^8.13.0",
     "redis": "^4",
