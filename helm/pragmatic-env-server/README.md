@@ -7,7 +7,7 @@ Deploys the headless pragmatic-server (connectors + identity).
 The master key is required and is supplied at install time. It is never committed to values.yaml.
 
     helm install pragmatic ./helm/pragmatic-env-server \
-      --set image.repository=<registry>/pragmatic-server \
+      --set image.repository=<registry>/pragmatic-env-server \
       --set secrets.masterKeyB64=<base64 master key>
 
 ## Upgrade
