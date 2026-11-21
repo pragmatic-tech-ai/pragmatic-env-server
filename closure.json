@@ -1,0 +1,25 @@
+{
+  "pragmatic-env-server": {
+    "entrypoint": [
+      "node",
+      "server/dist/bin/pragmatic-serverd.js"
+    ],
+    "alsoRuns": [
+      "server/dist/bin/pragmatic-workerd.js"
+    ],
+    "packages": [],
+    "files": [
+      "pragmatic-env-server/package.json",
+      "pragmatic-env-server/node_modules",
+      "pragmatic-env-server/packages/pragmatic-identity-engine-binding/package.json",
+      "pragmatic-env-server/packages/pragmatic-identity-engine-binding/node_modules",
+      "pragmatic-env-server/packages/pragmatic-identity-engine-binding/dist",
+      "pragmatic-env-server/packages/pragmatic-connectors-host/package.json",
+      "pragmatic-env-server/packages/pragmatic-connectors-host/node_modules",
+      "pragmatic-env-server/packages/pragmatic-connectors-host/dist",
+      "pragmatic-env-server/server/package.json",
+      "pragmatic-env-server/server/node_modules",
+      "pragmatic-env-server/server/dist"
+    ]
+  }
+}

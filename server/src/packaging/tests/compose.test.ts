@@ -10,7 +10,7 @@ class Artifacts
 {
     private static Root(): string
     {
-        return join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+        return join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
     }
 
     public static Compose(): unknown

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 
 class Repo
 {
-    private static readonly Root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+    private static readonly Root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
 
     public static Text(relative: string): string
     {
@@ -30,7 +30,7 @@ test('the environments example declares a connection with a secret ref, no inlin
 
 test('the chart README documents file-declared connections and their secretRef', () =>
 {
-    const readme = Repo.Text(join('helm', 'pragmatic-server', 'README.md'))
+    const readme = Repo.Text(join('helm', 'pragmatic-env-server', 'README.md'))
     assert.match(readme, /connections/)
     assert.match(readme, /secretRef/)
 })

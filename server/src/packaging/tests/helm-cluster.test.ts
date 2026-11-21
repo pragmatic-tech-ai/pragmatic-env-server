@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 
 class Chart
 {
-    private static readonly Root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'helm', 'pragmatic-server')
+    private static readonly Root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'helm', 'pragmatic-env-server')
 
     public static Text(relative: string): string
     {
@@ -42,7 +42,7 @@ test('the worker StatefulSet renders with component=worker, mTLS mount, advertis
     const ss = Chart.Text(join('templates', 'worker-statefulset.yaml'))
     assert.match(ss, /kind: StatefulSet/)
     assert.match(ss, /app\.kubernetes\.io\/component: worker/)
-    assert.match(ss, /dist\/bin\/pragmatic-workerd\.js/)
+    assert.match(ss, /"server\/dist\/bin\/pragmatic-workerd\.js"/)
     assert.match(ss, /PRAGMATIC_TLS_CERT_FILE/)
     assert.match(ss, /PRAGMATIC_TLS_KEY_FILE/)
     assert.match(ss, /PRAGMATIC_TLS_CA_FILE/)

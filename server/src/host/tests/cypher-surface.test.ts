@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { InMemoryMessageSocket, PragmaticClient, ErrorCodes, CypherCells } from '@pragmatic-tech-ai/pragmatic-protocol'
 import type { SolutionLanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
 // SnapshotReader is not re-exported from the todl package root or an exports subpath; reach the built module directly.
-import { SnapshotReader } from '../../../node_modules/@pragmatic-tech-ai/todl/dist/reflection-client/index.js'
+import { SnapshotReader } from '../../../../node_modules/@pragmatic-tech-ai/todl/dist/reflection-client/index.js'
 import { CypherLimits } from '../../config/cypher-limits.js'
 import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
 import { PragmaticServer } from '../../pragmatic-server.js'

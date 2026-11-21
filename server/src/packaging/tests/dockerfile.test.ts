@@ -9,13 +9,13 @@ class Dockerfile
     public static Text(): string
     {
         const here = dirname(fileURLToPath(import.meta.url))
-        return readFileSync(join(here, '..', '..', '..', 'docker', 'Dockerfile'), 'utf8')
+        return readFileSync(join(here, '..', '..', '..', '..', 'docker', 'Dockerfile'), 'utf8')
     }
 
     public static IgnoreText(): string
     {
         const here = dirname(fileURLToPath(import.meta.url))
-        return readFileSync(join(here, '..', '..', '..', 'docker', 'Dockerfile.dockerignore'), 'utf8')
+        return readFileSync(join(here, '..', '..', '..', '..', 'docker', 'Dockerfile.dockerignore'), 'utf8')
     }
 }
 
@@ -85,7 +85,7 @@ class Compose
     public static Text(): string
     {
         const here = dirname(fileURLToPath(import.meta.url))
-        return readFileSync(join(here, '..', '..', '..', 'docker', 'docker-compose.cluster.yml'), 'utf8')
+        return readFileSync(join(here, '..', '..', '..', '..', 'docker', 'docker-compose.cluster.yml'), 'utf8')
     }
 }
 

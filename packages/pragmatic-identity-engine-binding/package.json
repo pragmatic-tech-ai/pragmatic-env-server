@@ -1,10 +1,12 @@
 {
   "name": "@pragmatic-tech-ai/pragmatic-identity-engine-binding",
   "version": "0.1.1",
+  "private": true,
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pragmatic-tech-ai/todl-identity-engine.git"
+    "url": "https://github.com/pragmatic-tech-ai/pragmatic-env-server.git",
+    "directory": "packages/pragmatic-identity-engine-binding"
   },
   "description": "Bridge engine binding the TODL security model to the pragmatic-identity authorization model: security vocabulary mapping and tier-1 access-depth, membership and field-security evaluation.",
   "type": "module",
@@ -20,29 +22,22 @@
     "dist",
     "README.md"
   ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "public"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "clean": "rimraf dist",
-    "prepublishOnly": "npm run clean && npm run build",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
-    "rimraf": "^6.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0",
     "@pragmatic-tech-ai/todl-runtime": "^0.7.0"
   },
   "dependencies": {
-    "@pragmatic-tech-ai/pragmatic-graph": "file:../pragmatic-graph",
-    "@pragmatic-tech-ai/pragmatic-identity": "file:../pragmatic-shared/packages/pragmatic-identity"
+    "@pragmatic-tech-ai/pragmatic-graph": "^0.6.0",
+    "@pragmatic-tech-ai/pragmatic-identity": "^0.17.2"
   },
   "peerDependencies": {
-    "@pragmatic-tech-ai/todl": "^0.66.2"
+    "@pragmatic-tech-ai/todl": "^0.66.3"
   }
 }

@@ -42,7 +42,7 @@ spec:
         - name: worker
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["node", "dist/bin/pragmatic-workerd.js"]
+          command: ["node", "server/dist/bin/pragmatic-workerd.js"]
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false

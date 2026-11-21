@@ -6,13 +6,13 @@ Deploys the headless pragmatic-server (connectors + identity).
 
 The master key is required and is supplied at install time. It is never committed to values.yaml.
 
-    helm install pragmatic ./helm/pragmatic-server \
+    helm install pragmatic ./helm/pragmatic-env-server \
       --set image.repository=<registry>/pragmatic-server \
       --set secrets.masterKeyB64=<base64 master key>
 
 ## Upgrade
 
-    helm upgrade pragmatic ./helm/pragmatic-server --reuse-values
+    helm upgrade pragmatic ./helm/pragmatic-env-server --reuse-values
 
 Environments are configured through the `environments` value (rendered to `environments.json` in a ConfigMap). `environments` is the environment map (the body under the `environments` key; the chart wraps it), e.g. `environments: { acme: { displayName: Acme } }`. Put secret references there, never secret values.
 
@@ -28,7 +28,7 @@ An environment may declare external connections under `connections` in its `envi
 
 Both are off by default.
 
-    helm upgrade pragmatic ./helm/pragmatic-server --reuse-values \
+    helm upgrade pragmatic ./helm/pragmatic-env-server --reuse-values \
       --set deploymentMode=cloud \
       --set ingress.enabled=true --set ingress.host=pragmatic.example.com \
       --set autoscaling.enabled=true

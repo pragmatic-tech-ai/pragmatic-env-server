@@ -10,7 +10,7 @@ class ImageChart
     public static readonly Workloads: readonly string[] = ['deployment.yaml', 'gateway-deployment.yaml', 'worker-statefulset.yaml']
     /** The pod-spec block: rendered only when image.pullSecrets is a non-empty list, one `- name:` per secret. */
     public static readonly PullSecretsBlock = /\{\{- with \.Values\.image\.pullSecrets \}\}\n\s+imagePullSecrets:\n\s+\{\{- range \. \}\}\n\s+- name: \{\{ \. \}\}\n\s+\{\{- end \}\}\n\s+\{\{- end \}\}/
-    private static readonly Root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'helm', 'pragmatic-server')
+    private static readonly Root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'helm', 'pragmatic-env-server')
     private static readonly CarriageReturn = /\r/g
     private static readonly Utf8 = 'utf8'
 

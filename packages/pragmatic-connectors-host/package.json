@@ -1,10 +1,12 @@
 {
   "name": "@pragmatic-tech-ai/pragmatic-connectors-host",
   "version": "0.3.1",
+  "private": true,
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pragmatic-tech-ai/todl-connectors-host.git"
+    "url": "https://github.com/pragmatic-tech-ai/pragmatic-env-server.git",
+    "directory": "packages/pragmatic-connectors-host"
   },
   "type": "module",
   "exports": {
@@ -15,7 +17,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "pg": "^8.13.0",
@@ -23,11 +26,11 @@
     "mongodb": "^6.12.0"
   },
   "peerDependencies": {
-    "@pragmatic-tech-ai/todl": "^0.66.2",
+    "@pragmatic-tech-ai/todl": "^0.66.3",
     "@pragmatic-tech-ai/todl-runtime": "^0.7.0"
   },
   "devDependencies": {
-    "@pragmatic-tech-ai/pragmatic-graph": "file:../pragmatic-graph",
+    "@pragmatic-tech-ai/pragmatic-graph": "^0.6.0",
     "@types/node": "^22.20.1",
     "@types/pg": "^8.11.0",
     "pg-mem": "^3.0.0",
@@ -36,9 +39,5 @@
   },
   "files": [
     "dist"
-  ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "public"
-  }
+  ]
 }

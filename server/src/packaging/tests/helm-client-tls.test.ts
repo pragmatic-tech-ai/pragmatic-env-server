@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 
 class Chart
 {
-    private static readonly Root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'helm', 'pragmatic-server')
+    private static readonly Root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'helm', 'pragmatic-env-server')
 
     public static Text(relative: string): string
     {

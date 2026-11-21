@@ -8,7 +8,7 @@ import { DeliveryChannel, EnvironmentCatalogComposer, type IEnvironmentCatalog }
 import { RealmSecurityModel } from '@pragmatic-tech-ai/pragmatic-identity-engine-binding'
 import { IdpDirectorySnapshot, type ISecurityModelConfig } from '@pragmatic-tech-ai/pragmatic-identity'
 import { NodeFsStorage } from '@pragmatic-tech-ai/todl-runtime/node'
-import { SecuritySettingCatalogCheck } from '../../../src/host/environment/security-setting-catalog-check.js'
+import { SecuritySettingCatalogCheck } from '../security-setting-catalog-check.js'
 import { BundleBuilder, EnvKind, NorthwindApp } from '@pragmatic-tech-ai/pragmatic-tenant-plane'
 
 /** The demo Contoso tier-1 setting and the demo environment's composed catalog (the Northwind delivery). */

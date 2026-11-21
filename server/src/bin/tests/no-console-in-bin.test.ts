@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 class BinSources
 {
     private static readonly Needle = 'console.'
-    private static readonly Files = ['../server-main.ts', '../worker-main.ts', '../gateway-main.ts']
+    private static readonly Files = ['../server-main.ts', '../worker-main.ts']
     private static readonly Utf8 = 'utf8'
 
     public static Offenders(): string[]

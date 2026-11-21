@@ -1,0 +1,47 @@
+{
+  "name": "@pragmatic-tech-ai/pragmatic-env-server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "workspaces": [
+    "packages/pragmatic-identity-engine-binding",
+    "packages/pragmatic-connectors-host",
+    "server"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/pragmatic-identity-engine-binding && npm run build -w packages/pragmatic-connectors-host && tsc -p tsconfig.build.json",
+    "test": "npm test -w packages/pragmatic-identity-engine-binding && npm test -w packages/pragmatic-connectors-host && npm test -w server",
+    "typecheck": "tsc --noEmit && npm run typecheck -w packages/pragmatic-identity-engine-binding && npm run typecheck -w packages/pragmatic-connectors-host"
+  },
+  "devDependencies": {
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.17.2",
+    "@types/node": "^22.20.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  },
+  "pragmaticClosureCheck": {
+    "Manifest": "closure.json",
+    "Dockerfile": "Dockerfile",
+    "Apps": [
+      "pragmatic-env-server"
+    ],
+    "CompiledRoots": [
+      [
+        "packages/pragmatic-identity-engine-binding/dist/",
+        "packages/pragmatic-identity-engine-binding/src/"
+      ],
+      [
+        "packages/pragmatic-connectors-host/dist/",
+        "packages/pragmatic-connectors-host/src/"
+      ],
+      [
+        "server/dist/",
+        "server/src/"
+      ]
+    ]
+  }
+}

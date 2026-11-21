@@ -9,7 +9,7 @@ class Chart
 {
     public static Dir(): string
     {
-        return join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'helm', 'pragmatic-server')
+        return join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'helm', 'pragmatic-env-server')
     }
 
     public static HelmOnPath(): boolean

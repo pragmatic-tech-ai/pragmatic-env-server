@@ -30,7 +30,7 @@ class Gate
 class PackE2E
 {
     public static readonly PackName = '@pragmatic-tech-ai/pragmatic-adapter-pack-example'
-    private static readonly FixtureRelative = '../../../todl-connectors-host/fixtures/adapter-pack-example'
+    private static readonly FixtureRelative = '../../../packages/pragmatic-connectors-host/fixtures/adapter-pack-example'
     private static readonly Utf8 = 'utf8'
     private static readonly DirPrefix = 'plan9t5-'
     private static readonly PackageJson = 'package.json'
@@ -55,7 +55,7 @@ class PackE2E
     public static readonly EnvNpmCache = 'npm_config_cache'
     public static readonly AnyRange = '*'
     public static readonly RegistryHitMessage = 'the fake registry must have served the install'
-    public static readonly PreconditionMessage = 'adapter-pack-example fixture is not built: build the adapter-pack-example fixture first (npm run build in todl-connectors-host/fixtures/adapter-pack-example)'
+    public static readonly PreconditionMessage = 'adapter-pack-example fixture is not built: build the adapter-pack-example fixture first (npm run build in packages/pragmatic-connectors-host/fixtures/adapter-pack-example)'
 
     public static get FixtureDir(): string
     {
