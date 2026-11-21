@@ -1,6 +1,7 @@
 apiVersion: v2
 name: pragmatic-server
-description: Headless pragmatic-server (connectors + identity) for Kubernetes
+# The chart name stays pragmatic-server: deployments name their release and resources after it.
+description: Headless pragmatic-env-server (connectors + identity) for Kubernetes
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

@@ -4,7 +4,7 @@ import { QueryCompareOp, WriteAtomicity, WriteConcurrency, WriteFailureKind, Wri
 import type { QueryRequest } from "@pragmatic-tech-ai/todl";
 import { CypherAdapter } from "../cypher-adapter.js";
 import { FakeCypherSession, FilteringFakeCypherSession, TransactionalFakeCypherSession } from "../../testing/fake-cypher-session.js";
-import { describeDataSourceAdapter, describeInsertingAdapter } from "../../testing/adapter-conformance.js";
+import { AdapterConformance } from "../../testing/adapter-conformance.js";
 
 class CypherFixture
 {
@@ -31,13 +31,13 @@ class CypherFixture
     }
 }
 
-describeDataSourceAdapter("CypherAdapter (fake session)", () => CypherFixture.Make());
-describeDataSourceAdapter("CypherAdapter (transactional fake session)", () => CypherFixture.MakeTransactional());
+AdapterConformance.DescribeDataSourceAdapter("CypherAdapter (fake session)", () => CypherFixture.Make());
+AdapterConformance.DescribeDataSourceAdapter("CypherAdapter (transactional fake session)", () => CypherFixture.MakeTransactional());
 
 const EventLabel = "Event";
 const UuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-describeInsertingAdapter("CypherAdapter (fake session)", () => new CypherAdapter(new FakeCypherSession()),
+AdapterConformance.DescribeInsertingAdapter("CypherAdapter (fake session)", () => new CypherAdapter(new FakeCypherSession()),
     { Source: EventLabel, FailFields: { [FakeCypherSession.FailField]: "1" } });
 
 test("cypher advertises CanAssignKeys", () =>

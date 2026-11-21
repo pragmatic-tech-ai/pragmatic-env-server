@@ -4,7 +4,7 @@ import { QueryCompareOp, WriteAtomicity, WriteConcurrency, WriteFailureKind, Wri
 import { DocumentAdapter } from "../document-adapter.js";
 import type { DocumentFindOptions, IDocumentSession } from "../document-session.js";
 import { FakeDocumentSession, TransactionalFakeDocumentSession } from "../../testing/fake-document-session.js";
-import { describeDataSourceAdapter, describeInsertingAdapter } from "../../testing/adapter-conformance.js";
+import { AdapterConformance } from "../../testing/adapter-conformance.js";
 
 class DocumentFixture
 {
@@ -25,7 +25,7 @@ class DocumentFixture
     }
 }
 
-describeDataSourceAdapter("DocumentAdapter (fake session)", () => DocumentFixture.Make());
+AdapterConformance.DescribeDataSourceAdapter("DocumentAdapter (fake session)", () => DocumentFixture.Make());
 
 const Events = "events";
 const MongoId = "_id";
@@ -47,7 +47,7 @@ class ReorderingInsertSession extends FakeDocumentSession
     }
 }
 
-describeInsertingAdapter("DocumentAdapter (fake session)", () => new DocumentAdapter(new FakeDocumentSession()),
+AdapterConformance.DescribeInsertingAdapter("DocumentAdapter (fake session)", () => new DocumentAdapter(new FakeDocumentSession()),
     { Source: Events, IdKey: MongoId, FailFields: { [FakeDocumentSession.FailField]: "1" } });
 
 test("document advertises CanAssignKeys iff its session can insert", () =>

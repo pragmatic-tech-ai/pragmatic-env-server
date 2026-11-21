@@ -1,6 +1,7 @@
-# pragmatic-server Helm chart
+# pragmatic-env-server Helm chart
 
-Deploys the headless pragmatic-server (connectors + identity).
+Deploys the headless pragmatic-env-server (connectors + identity). The chart keeps the name `pragmatic-server`
+(`Chart.yaml`), which existing deployments name their release and resources after.
 
 ## Install
 

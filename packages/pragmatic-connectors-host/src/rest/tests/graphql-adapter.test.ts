@@ -7,7 +7,7 @@ import { FetchFailureClassifier } from "../fetch-failure-classifier.js";
 import { RestHttpMethod } from "../rest-http-client.js";
 import type { RestResponse } from "../rest-http-client.js";
 import { FakeGraphQlHttpClient } from "../../testing/fake-graphql-http-client.js";
-import { describeDataSourceAdapter, describeInsertingAdapter } from "../../testing/adapter-conformance.js";
+import { AdapterConformance } from "../../testing/adapter-conformance.js";
 
 const Endpoint = "https://api.example/graphql";
 const Customer = "Customer";
@@ -70,12 +70,12 @@ class ThrowingGraphQlClient extends FakeGraphQlHttpClient
     }
 }
 
-describeDataSourceAdapter("GraphQlAdapter (fake client)", () => GraphQlAdapterFixture.Make(GraphQlAdapterFixture.ConfigFull()));
+AdapterConformance.DescribeDataSourceAdapter("GraphQlAdapter (fake client)", () => GraphQlAdapterFixture.Make(GraphQlAdapterFixture.ConfigFull()));
 
 const InsertingConfig = (): Record<string, string> =>
     ({ style: "graphql", endpoint: Endpoint, source: Customer, queryField: "customers", insertMutation: "insertCustomer" });
 
-describeInsertingAdapter("GraphQlAdapter (fake client)", () => GraphQlAdapterFixture.Make(InsertingConfig()),
+AdapterConformance.DescribeInsertingAdapter("GraphQlAdapter (fake client)", () => GraphQlAdapterFixture.Make(InsertingConfig()),
     { Source: Customer, FailFields: { [FakeGraphQlHttpClient.FailField]: "1" } });
 
 test("graphql advertises CanAssignKeys only when insertMutation is configured", () =>

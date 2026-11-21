@@ -7,7 +7,7 @@ import { RestConnectionConfig } from "../rest-connection-config.js";
 import { RestHttpMethod } from "../rest-http-client.js";
 import type { RestResponse } from "../rest-http-client.js";
 import { FakeRestHttpClient } from "../../testing/fake-rest-http-client.js";
-import { describeDataSourceAdapter, describeInsertingAdapter } from "../../testing/adapter-conformance.js";
+import { AdapterConformance } from "../../testing/adapter-conformance.js";
 
 const BaseUrl = "https://api.example/v1";
 const Customer = "Customer";
@@ -51,7 +51,7 @@ class RestAdapterFixture
     }
 }
 
-describeDataSourceAdapter("RestAdapter (fake client)", () => RestAdapterFixture.Make());
+AdapterConformance.DescribeDataSourceAdapter("RestAdapter (fake client)", () => RestAdapterFixture.Make());
 
 const Orders = "orders";
 
@@ -64,7 +64,7 @@ class RestInsertFixture
     }
 }
 
-describeInsertingAdapter("RestAdapter (fake client)", () => RestInsertFixture.Make(),
+AdapterConformance.DescribeInsertingAdapter("RestAdapter (fake client)", () => RestInsertFixture.Make(),
     { Source: Orders, FailFields: { [FakeRestHttpClient.FailField]: "1" } });
 
 test("rest key from Location: the assigned key is the last path segment of the Location header", async () =>

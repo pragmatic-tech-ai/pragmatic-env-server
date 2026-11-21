@@ -48,31 +48,46 @@ class CoHostedFx
     }
 }
 
-let fx: CoHostedFx | undefined
+/** The fixture of the running test, disposed after each test. */
+class CoHostedFixtures
+{
+    private static current: CoHostedFx | undefined
+
+    public static New(): CoHostedFx
+    {
+        CoHostedFixtures.current = new CoHostedFx()
+        return CoHostedFixtures.current
+    }
+
+    public static async DisposeCurrent(): Promise<void>
+    {
+        await CoHostedFixtures.current?.Dispose()
+        CoHostedFixtures.current = undefined
+    }
+}
 
 afterEach(async () =>
 {
-    await fx?.Dispose()
-    fx = undefined
+    await CoHostedFixtures.DisposeCurrent()
 })
 
 test('a co-hosted Development server with identity has a SecurityAdmin', async () =>
 {
-    fx = new CoHostedFx()
+    const fx = CoHostedFixtures.New()
     const server = await fx.Start(EnvironmentPurpose.Development, true, true)
     assert.notEqual(await server.SecurityAdmin(), undefined)
 })
 
 test('a plain Development server has no SecurityAdmin', async () =>
 {
-    fx = new CoHostedFx()
+    const fx = CoHostedFixtures.New()
     const server = await fx.Start(EnvironmentPurpose.Development, false, true)
     assert.equal(await server.SecurityAdmin(), undefined)
 })
 
 test('a co-hosted Development server without identity fails SecurityAdmin like a Runtime server does (misprovisioned)', async () =>
 {
-    fx = new CoHostedFx()
+    const fx = CoHostedFixtures.New()
     const co = await fx.Start(EnvironmentPurpose.Development, true, false)
     const runtime = await fx.Start(EnvironmentPurpose.Runtime, false, false)
     await assert.rejects(() => co.SecurityAdmin())

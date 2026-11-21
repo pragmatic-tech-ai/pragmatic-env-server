@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import type { IDataSourceAdapter } from "@pragmatic-tech-ai/todl";
 import { CypherAdapter } from "../cypher-adapter.js";
 import { CypherConnectionConfig, Neo4jCypherSession } from "../neo4j-cypher-session.js";
-import { describeDataSourceAdapter } from "../../testing/adapter-conformance.js";
+import { AdapterConformance } from "../../testing/adapter-conformance.js";
 import { SeedingCypherSession } from "../../testing/seeding-cypher-session.js";
 
 class LiveNeo4j
@@ -21,7 +21,7 @@ class LiveNeo4j
         const uri = LiveNeo4j.Uri();
         if (uri !== "")
         {
-            describeDataSourceAdapter(LiveNeo4j.SuiteName, () => LiveNeo4j.Make(uri));
+            AdapterConformance.DescribeDataSourceAdapter(LiveNeo4j.SuiteName, () => LiveNeo4j.Make(uri));
             after(async () =>
             {
                 await Promise.all(LiveNeo4j.opened.map(adapter => adapter.Dispose()));

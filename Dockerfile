@@ -61,22 +61,26 @@ RUN mkdir -p packages/pragmatic-identity-engine-binding/node_modules packages/pr
 
 FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS runtime
 ENV NODE_ENV=production
-# uid and gid are both 10001, so the --chown=10001:10001 copies below never leave files under an orphan group.
+# The service runs as 10001 (uid and gid); the app tree is root's and read-only to it, but for the directories the render
+# option WritableDirs names.
 RUN groupadd --system --gid 10001 pragmatic && useradd --system --create-home --uid 10001 --gid 10001 pragmatic
 WORKDIR /workspace/pragmatic-env-server
 
 FROM runtime AS pragmatic-env-server
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/package.json /workspace/pragmatic-env-server/package.json
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/node_modules /workspace/pragmatic-env-server/node_modules
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/package.json /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/package.json
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/node_modules /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/node_modules
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/dist /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/dist
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/package.json /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/package.json
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/node_modules /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/node_modules
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/dist /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/dist
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/server/package.json /workspace/pragmatic-env-server/server/package.json
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/server/node_modules /workspace/pragmatic-env-server/server/node_modules
-COPY --from=build --chown=10001:10001 /workspace/pragmatic-env-server/server/dist /workspace/pragmatic-env-server/server/dist
+COPY --from=build /workspace/pragmatic-env-server/package.json /workspace/pragmatic-env-server/package.json
+COPY --from=build /workspace/pragmatic-env-server/node_modules /workspace/pragmatic-env-server/node_modules
+COPY --from=build /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/package.json /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/package.json
+COPY --from=build /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/node_modules /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/node_modules
+COPY --from=build /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/dist /workspace/pragmatic-env-server/packages/pragmatic-identity-engine-binding/dist
+COPY --from=build /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/package.json /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/package.json
+COPY --from=build /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/node_modules /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/node_modules
+COPY --from=build /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/dist /workspace/pragmatic-env-server/packages/pragmatic-connectors-host/dist
+COPY --from=build /workspace/pragmatic-env-server/server/package.json /workspace/pragmatic-env-server/server/package.json
+COPY --from=build /workspace/pragmatic-env-server/server/node_modules /workspace/pragmatic-env-server/server/node_modules
+COPY --from=build /workspace/pragmatic-env-server/server/dist /workspace/pragmatic-env-server/server/dist
+# The directories the service writes inside its tree (render option WritableDirs): created when missing, owned by the
+# service user; what was copied into them, and everything else, stays root's.
+RUN mkdir -p /workspace/pragmatic-env-server/node_modules/@pragmatic-tech-ai/todl && chown 10001:10001 /workspace/pragmatic-env-server/node_modules/@pragmatic-tech-ai/todl
 ARG COMPONENT_DIGEST
 COPY --from=component /component/component.json /pragmatic/component.json
 LABEL ai.pragmatic-tech.component.digest=$COMPONENT_DIGEST

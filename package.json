@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pragmatic-tech-ai/pragmatic-env-server.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.5"
@@ -18,7 +22,7 @@
     "typecheck": "tsc --noEmit && npm run typecheck -w packages/pragmatic-identity-engine-binding && npm run typecheck -w packages/pragmatic-connectors-host"
   },
   "devDependencies": {
-    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.17.6",
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.17.7",
     "@types/node": "^22.20.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0"
@@ -46,6 +50,9 @@
   },
   "pragmaticContainerTemplate": {
     "App": "pragmatic-env-server",
-    "Entry": "server/src/bin/pragmatic-serverd.ts"
+    "Entry": "server/src/bin/pragmatic-serverd.ts",
+    "WritableDirs": [
+      "node_modules/@pragmatic-tech-ai/todl"
+    ]
   }
 }

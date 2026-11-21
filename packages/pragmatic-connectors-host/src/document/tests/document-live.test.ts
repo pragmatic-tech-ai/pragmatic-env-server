@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import type { IDataSourceAdapter } from "@pragmatic-tech-ai/todl";
 import { DocumentAdapter } from "../document-adapter.js";
 import { DocumentConnectionConfig, MongoDocumentSession } from "../mongo-document-session.js";
-import { describeDataSourceAdapter } from "../../testing/adapter-conformance.js";
+import { AdapterConformance } from "../../testing/adapter-conformance.js";
 import { SeedingDocumentSession } from "../../testing/seeding-document-session.js";
 
 class LiveMongo
@@ -21,7 +21,7 @@ class LiveMongo
         const url = process.env[LiveMongo.UrlVar] ?? "";
         if (url !== "")
         {
-            describeDataSourceAdapter(LiveMongo.SuiteName, () => LiveMongo.Make(url));
+            AdapterConformance.DescribeDataSourceAdapter(LiveMongo.SuiteName, () => LiveMongo.Make(url));
             after(async () =>
             {
                 await Promise.all(LiveMongo.opened.map(adapter => adapter.Dispose()));
