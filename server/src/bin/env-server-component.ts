@@ -17,11 +17,12 @@ export class EnvServerComponent
         options: [
             {
                 name: 'core',
-                description: 'The server process: listener, state folder, environments and master key.',
+                description: 'The server process: listener, state folder, database, environments and master key.',
                 settings: [
                     { name: 'host', type: SettingType.String, source: 'PRAGMATIC_HOST', default: '0.0.0.0', description: 'Address the listener binds.' },
                     { name: 'port', type: SettingType.Integer, source: 'PRAGMATIC_PORT', default: 8080, description: 'Port the listener binds.' },
                     { name: 'baseDir', type: SettingType.String, source: 'PRAGMATIC_BASE_DIR', required: true, description: 'The state folder.' },
+                    { name: 'databaseUrl', type: SettingType.String, source: 'PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE', required: true, secret: true, description: 'The URL of the server\'s own Postgres database, where every record of every environment it hosts lives (a mounted secret file; deploymentMode cloud uses the provider database of its option instead).' },
                     { name: 'deploymentMode', type: SettingType.String, source: 'PRAGMATIC_DEPLOYMENT_MODE', default: 'local', description: 'local or cloud.' },
                     { name: 'configFile', type: SettingType.String, source: 'PRAGMATIC_CONFIG_FILE', description: 'Optional JSON file with host, port, baseDir, deploymentMode, idle and Redis defaults.' },
                     { name: 'environmentsFile', type: SettingType.String, source: 'PRAGMATIC_ENVIRONMENTS_FILE', description: 'File listing the environments served (or set environmentId).' },
@@ -54,8 +55,7 @@ export class EnvServerComponent
                 name: 'audit',
                 description: 'Where access audit records go.',
                 settings: [
-                    { name: 'sink', type: SettingType.String, source: 'PRAGMATIC_AUDIT_SINK', description: 'none, file or sql (sql needs deploymentMode cloud).' },
-                    { name: 'file', type: SettingType.String, source: 'PRAGMATIC_AUDIT_FILE', description: 'The audit file (required for sink file).' },
+                    { name: 'sink', type: SettingType.String, source: 'PRAGMATIC_AUDIT_SINK', default: 'sql', description: 'sql (rows in the server database) or none; the file sink is retired and refused.' },
                 ],
             },
             ServerOptionDeclarations.RateLimit,
