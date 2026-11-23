@@ -10,6 +10,7 @@ import type { ILanguageService } from '@pragmatic-tech-ai/todl/solution-services
 import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class PromptSafetyFixture
 {
@@ -44,7 +45,7 @@ class PromptSafetyFixture
 test('solution/create over the real manager + the server prompt service switches active even when the active solution is dirty', async () =>
 {
     const base = await mkdtemp(join(tmpdir(), PromptSafetyFixture.TempPrefix))
-    const server = new PragmaticServer({ purpose: EnvironmentPurpose.Development, packagesRoot: join(base, 'packages'), graphsRoot: join(base, 'graphs'), applicationsRoot: join(base, 'applications'), solutionsRoot: join(base, 'solutions') })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, purpose: EnvironmentPurpose.Development, packagesRoot: join(base, 'packages'), graphsRoot: join(base, 'graphs'), applicationsRoot: join(base, 'applications'), solutionsRoot: join(base, 'solutions') })
     try
     {
         await server.Start()

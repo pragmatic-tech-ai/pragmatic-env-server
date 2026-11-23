@@ -87,7 +87,7 @@ class ViewFx
         {
             await fx.Package(ViewFx.Crm.id, ViewFx.Crm.version, ViewFx.CrmTodl)
             await fx.Package(ViewFx.Notes.id, ViewFx.Notes.version, ViewFx.NotesTodl)
-            fx.Live(ViewFx.App, ViewFx.AppVersion, [ViewFx.Crm, ViewFx.Notes])
+            await fx.Live(ViewFx.App, ViewFx.AppVersion, [ViewFx.Crm, ViewFx.Notes])
             await fx.Start(options)
             await body(fx)
         }

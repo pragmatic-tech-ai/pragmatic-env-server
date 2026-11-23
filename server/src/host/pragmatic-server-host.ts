@@ -10,7 +10,7 @@ import { WsMessageSocket, HeartbeatMonitor, BackpressurePolicy, TransportCloseCo
 import type { ILanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
 import { AuthMethod, type AccessContext, type Realm } from '@pragmatic-tech-ai/pragmatic-identity'
 import type { ServerIdentityPack } from '@pragmatic-tech-ai/pragmatic-identity-store'
-import { MachineTls, type MachineTlsRef, MachineCertIdentity, type MasterKeyRef, type PagingLimits, type AdapterPacksConfig, type WsResilienceConfig, RateLimitGuard, RateLimitScope, AuditSurface, NullAccessAuditSink, type IAccessAuditSink, HealthEndpoint, ClusterKeys, type DeploymentMode, type Observability, DrainController, type IInFlightSource, RequestCorrelation, type WebSocketAddress } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { MachineTls, type MachineTlsRef, MachineCertIdentity, type MasterKeyRef, type PagingLimits, type AdapterPacksConfig, type WsResilienceConfig, RateLimitGuard, RateLimitScope, AuditSurface, NullAccessAuditSink, type IAccessAuditSink, HealthEndpoint, type DeploymentMode, type Observability, DrainController, type IInFlightSource, RequestCorrelation, type WebSocketAddress } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { type MachineAuthContext, AuthHttpEndpoint } from './auth-http-endpoint.js'
 import type { CypherLimits } from '../config/cypher-limits.js'
 import type { IProvisionedSecretSource } from '../config/provisioned-secret-source.js'
@@ -24,9 +24,7 @@ import { InMemoryEnvironmentCoordinator } from '../environments/environment-coor
 import { EnvironmentRegistry } from '../environments/environment-registry.js'
 import { InMemoryEnvironmentOwnership, EnvironmentOwnedElsewhereError } from '../environments/environment-ownership.js'
 import { RedisEnvironmentOwnership } from '../environments/redis-environment-ownership.js'
-import { FetchHttpClient, InMemoryOidcFlowStateStore } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
-import { RedisOidcFlowStateStore } from '../identity/redis-oidc-flow-state-store.js'
-import type { IdentityRuntime } from '../identity/identity-runtime.js'
+import { IdentityRuntimeFactory } from '../identity/identity-runtime-factory.js'
 import type { IEnvironmentProvisioning } from '../environments/environment-provisioning.js'
 import type { PlatformServices } from '../platform/platform-services.js'
 import { NullLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
@@ -44,7 +42,7 @@ export interface PragmaticServerHostOptions
     provisioning: IEnvironmentProvisioning
     idleTtlMs?: number
     idleSweepMs?: number
-    platform?: PlatformServices
+    platform: PlatformServices
     deploymentMode?: DeploymentMode
     redisUrl?: string
     replicaId?: string
@@ -68,7 +66,6 @@ export interface PragmaticServerHostOptions
 export class PragmaticServerHost
 {
     private static readonly DefaultHost = '127.0.0.1'
-    private static readonly FlowKeySeparator = ':'
     private static readonly UpgradeEvent = 'upgrade'
     private static readonly RequestEvent = 'request'
     private static readonly CloseEvent = 'close'
@@ -194,17 +191,6 @@ export class PragmaticServerHost
         this.sweep.unref()
     }
 
-    private static BuildIdentityRuntime(redisUrl: string | undefined): IdentityRuntime
-    {
-        const url = redisUrl !== undefined && redisUrl.length > 0 ? redisUrl : undefined
-        return {
-            HttpClient: new FetchHttpClient(),
-            FlowStateFor: environmentId => url === undefined
-                ? new InMemoryOidcFlowStateStore()
-                : new RedisOidcFlowStateStore(url, ClusterKeys.OidcFlowPrefix + environmentId + PragmaticServerHost.FlowKeySeparator),
-        }
-    }
-
     public static async StartAsync(options: PragmaticServerHostOptions): Promise<PragmaticServerHost>
     {
         const coordinator = new InMemoryEnvironmentCoordinator()
@@ -212,7 +198,7 @@ export class PragmaticServerHost
             ? new RedisEnvironmentOwnership(options.redisUrl, options.replicaId ?? randomUUID())
             : new InMemoryEnvironmentOwnership()
         await ownership.Start().catch(() => {})
-        const registry = new EnvironmentRegistry(options.baseDir, options.masterKey, options.provisioning, coordinator, options.platform, options.deploymentMode, ownership, options.provisionedSecrets, PragmaticServerHost.BuildIdentityRuntime(options.redisUrl), options.adapterPacks, options.logger)
+        const registry = new EnvironmentRegistry(options.baseDir, options.masterKey, options.provisioning, coordinator, options.platform, options.deploymentMode, ownership, options.provisionedSecrets, await IdentityRuntimeFactory.Build(options.platform), options.adapterPacks, options.logger)
         const host = options.host ?? PragmaticServerHost.DefaultHost
         const httpServer = options.clientTls === undefined ? createServer() : httpsCreateServer(MachineTls.OptionalServer(options.clientTls))
         const resilience = options.wsResilience ?? PragmaticServerHost.DefaultWsResilience

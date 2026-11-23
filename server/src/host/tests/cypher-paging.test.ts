@@ -14,6 +14,7 @@ import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import type { IGraphCypherQuery, IDevCypherRequest } from '../engine/engine-cypher-query.js'
 import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role, ResourceRef, ResourceKind, ResourceAuthorizationPolicy } from '@pragmatic-tech-ai/pragmatic-identity'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 /** The server's dev Cypher, counting the queries that reach the engine (the dev path's graph fetch). */
 class CountingDevCypher implements IGraphCypherQuery
@@ -143,7 +144,7 @@ class CypherPagingFixture
         const packages = mkdtempSync(join(tmpdir(), CypherPagingFixture.PackagesPrefix))
         cpSync(join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
         writeFileSync(join(solution, CypherPagingFixture.ModelFile), CypherPagingFixture.ModelTodl)
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         await server.OpenSolution(solution)
         const language = await server.LanguageService() as SolutionLanguageService

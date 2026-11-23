@@ -5,6 +5,7 @@ import { DeploymentMode, Observability, ObservabilityRole, type ServerConfig } f
 import { ServerBootstrap } from '../server-bootstrap.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixtures
 {
@@ -41,8 +42,8 @@ test('ComposeOptions and ComposeWorkerOptions thread observability through', asy
     const obs = Observability.Start({ role: ObservabilityRole.Host, metricsPort: port })
     try
     {
-        assert.equal(ServerBootstrap.ComposeOptions(Fixtures.Config(), Fixtures.Provisioning(), undefined, undefined, undefined, obs).observability, obs)
-        assert.equal(ServerBootstrap.ComposeWorkerOptions(Fixtures.Config(), Fixtures.Provisioning(), undefined, undefined, undefined, obs).observability, obs)
+        assert.equal(ServerBootstrap.ComposeOptions(Fixtures.Config(), Fixtures.Provisioning(), CustomPlatformFixture.Mem(), undefined, undefined, obs).observability, obs)
+        assert.equal(ServerBootstrap.ComposeWorkerOptions(Fixtures.Config(), Fixtures.Provisioning(), CustomPlatformFixture.Mem(), undefined, undefined, obs).observability, obs)
     }
     finally
     {
@@ -52,6 +53,6 @@ test('ComposeOptions and ComposeWorkerOptions thread observability through', asy
 
 test('Compose* leave observability undefined when not passed', () =>
 {
-    assert.equal(ServerBootstrap.ComposeOptions(Fixtures.Config(), Fixtures.Provisioning()).observability, undefined)
-    assert.equal(ServerBootstrap.ComposeWorkerOptions(Fixtures.Config(), Fixtures.Provisioning()).observability, undefined)
+    assert.equal(ServerBootstrap.ComposeOptions(Fixtures.Config(), Fixtures.Provisioning(), CustomPlatformFixture.Mem()).observability, undefined)
+    assert.equal(ServerBootstrap.ComposeWorkerOptions(Fixtures.Config(), Fixtures.Provisioning(), CustomPlatformFixture.Mem()).observability, undefined)
 })

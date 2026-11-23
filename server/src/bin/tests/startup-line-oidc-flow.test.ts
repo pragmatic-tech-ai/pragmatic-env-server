@@ -13,15 +13,15 @@ class Fixtures
     }
 }
 
-test('StartupLine reports oidc-flow=redis without leaking the URL', () =>
+test('StartupLine reports oidc-flow=sql with redis configured, without leaking the URL', () =>
 {
     const line = ServerBootstrap.StartupLine(Fixtures.Config({ redisUrl: Fixtures.SecretUrl }), 1)
-    assert.match(line, /oidc-flow=redis\b/)
+    assert.match(line, /oidc-flow=sql\b/)
     assert.doesNotMatch(line, /hunter2/)
     assert.doesNotMatch(line, /redis:\/\//)
 })
 
-test('StartupLine reports oidc-flow=in-memory when no redisUrl', () =>
+test('StartupLine reports oidc-flow=sql when no redisUrl', () =>
 {
-    assert.match(ServerBootstrap.StartupLine(Fixtures.Config({}), 1), /oidc-flow=in-memory\b/)
+    assert.match(ServerBootstrap.StartupLine(Fixtures.Config({}), 1), /oidc-flow=sql\b/)
 })

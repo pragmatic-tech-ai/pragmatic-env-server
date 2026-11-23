@@ -24,10 +24,9 @@ export class PpSecurityHarness
         delete process.env[PpSecurityHarness.KeyEnv]
     }
 
-    public static Identity(identityRoot: string)
+    public static Identity()
     {
         return {
-            identityRoot,
             masterKey: { base64Env: PpSecurityHarness.KeyEnv },
             environment: { id: PpSecurityHarness.EnvironmentId, displayName: PpSecurityHarness.EnvironmentName },
         }

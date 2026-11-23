@@ -59,7 +59,8 @@ export class ConnectionAuthenticator
             return null
         }
         const session = await pack.Sessions.Validate(token)
-        if (session !== null)
+        // A session of another environment never authenticates here (the session table is shared by the deployment).
+        if (session !== null && session.RealmId === realm.Id)
         {
             const principal = await pack.Directory.Lookup(session.PrincipalId, realm)
             if (principal !== null)

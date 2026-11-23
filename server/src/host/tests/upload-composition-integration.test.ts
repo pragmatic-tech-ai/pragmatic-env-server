@@ -14,6 +14,7 @@ import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import type { IDevGraphService } from '../graphs/dev-graph-service.js'
 import type { EnvSolutionRoots } from '../solutions/env-solution-roots.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class UploadFixture
 {
@@ -150,7 +151,7 @@ test('two uploaded solutions compose live: disjoint roots, both listed, real mem
 {
     const base = await mkdtemp(join(tmpdir(), UploadFixture.TempPrefix))
     const solutionsRoot = join(base, UploadFixture.SolutionsDir)
-    const server = new PragmaticServer({ purpose: EnvironmentPurpose.Development, packagesRoot: join(base, UploadFixture.PackagesDir), graphsRoot: join(base, UploadFixture.GraphsDir), applicationsRoot: join(base, UploadFixture.ApplicationsDir), solutionsRoot })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, purpose: EnvironmentPurpose.Development, packagesRoot: join(base, UploadFixture.PackagesDir), graphsRoot: join(base, UploadFixture.GraphsDir), applicationsRoot: join(base, UploadFixture.ApplicationsDir), solutionsRoot })
     try
     {
         await server.Start()

@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AccessScope, Cypher, StorageKind } from '@pragmatic-tech-ai/pragmatic-graph'
 import type { ConnectorError, GraphEngine, IGraphEngineOptions } from '@pragmatic-tech-ai/pragmatic-graph'
@@ -80,7 +80,6 @@ class DeliveryFx
     public static readonly Acme = 'Acme'
     public static readonly NameMember = 'name'
     public static readonly ModelFile = 'model.json'
-    public static readonly LivePointer = 'live'
     public static readonly EngineField = 'environmentEngine'
     public static readonly ExtSet = 'ext-set'
     public static readonly Entry = 'index.html'
@@ -237,7 +236,8 @@ describe('environment delivery (ruling S4)', () =>
             assert.equal(result.status, AppWriteStatus.Invalid)
             assert.equal(result.reason, expected)
             for (const part of [DeliveryFx.Crm.id, DeliveryFx.Crm.version, DeliveryFx.CrmMajor.version, DeliveryFx.CrmApp, DeliveryFx.OtherApp]) assert.ok(result.reason?.includes(part), part)
-            assert.equal(existsSync(join(fx.AppsDir, DeliveryFx.OtherApp, DeliveryFx.LivePointer)), false, 'the live pointer is not written')
+            assert.equal(await fx.Applications().ManifestOf(DeliveryFx.OtherApp, DeliveryFx.V1), undefined, 'the manifest is not committed')
+            assert.equal(await fx.Applications().LiveVersion(DeliveryFx.OtherApp), undefined, 'the live pointer is not written')
             const current = await host.Engine()
             assert.equal(current, engine, 'not reopened')
             assert.equal(current.SchemaVersion, version, 'the engine is unchanged')
@@ -292,19 +292,19 @@ describe('environment delivery (ruling S4)', () =>
     {
         await DeliveryFx.Run(async fx =>
         {
-            fx.Live(DeliveryFx.CrmApp, DeliveryFx.V1, [DeliveryFx.Crm])
+            await fx.Live(DeliveryFx.CrmApp, DeliveryFx.V1, [DeliveryFx.Crm])
             const diagnostics = new UpgradeDiagnostics()
             const packages = new NodeFsStorage(fx.PackagesDir)
             const host = fx.Track(new FailingOpenHost(fx.Deliveries(), packages, fx.Services(), { Kind: StorageKind.Lmdb, Path: join(fx.Root, EnvironmentEngineHost.StoreDir) }, diagnostics))
             await host.Engine()
-            const ingest = new AppIngestService(packages, new NodeFsStorage(fx.AppsDir), host)
+            const ingest = new AppIngestService(packages, new NodeFsStorage(fx.AppsDir), fx.Applications(), host)
             // ext brings a new connector: the redelivery reopens, and that open fails
             host.FailNextOpen = true
             const result = await ingest.Ingest(DeliveryFx.Params(fx, DeliveryFx.ExtApp, DeliveryFx.V1, [DeliveryFx.Ext]))
             assert.equal(result.status, AppWriteStatus.Failed)
             assert.equal(result.reason, EnvironmentUpgradeFailedError.Reason)
             assert.equal(diagnostics.Upgrades.length, 1)
-            assert.equal(readFileSync(join(fx.AppsDir, DeliveryFx.ExtApp, DeliveryFx.LivePointer), 'utf8'), DeliveryFx.V1, 'the deploy landed')
+            assert.equal(await fx.Applications().LiveVersion(DeliveryFx.ExtApp), DeliveryFx.V1, 'the deploy landed')
             assert.ok((await DeliveryFx.Definitions(host)).includes(DeliveryFx.Customer), 'the next use retries and sees the app')
         })
     })
@@ -313,7 +313,7 @@ describe('environment delivery (ruling S4)', () =>
     {
         await DeliveryFx.Run(async fx =>
         {
-            fx.Live(DeliveryFx.CrmApp, DeliveryFx.V1, [DeliveryFx.Crm])
+            await fx.Live(DeliveryFx.CrmApp, DeliveryFx.V1, [DeliveryFx.Crm])
             const diagnostics = new UpgradeDiagnostics()
             const host = new FailingOpenHost(fx.Deliveries(), new NodeFsStorage(fx.PackagesDir), fx.Services(), { Kind: StorageKind.Lmdb, Path: fx.StorePath }, diagnostics)
             DeliveryFx.Install(fx, host)

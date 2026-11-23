@@ -3,6 +3,17 @@
 # Images: the released pragmatic-env-server (workers) and pragmatic-env-gateway (gateway); override the tags with
 # PRAGMATIC_ENV_SERVER_TAG / PRAGMATIC_ENV_GATEWAY_TAG.
 services:
+  # The workers' one shared database (A5): every worker of the deployment stores in it (compose-README.md, step 2).
+  pragmatic-postgres:
+    image: ghcr.io/pragmatic-tech-ai/pragmatic-postgres:${PRAGMATIC_POSTGRES_TAG:-0.1.0}
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    volumes:
+      - pragmatic-postgres-data:/var/lib/postgresql/data
+      - ./postgres:/etc/pragmatic-postgres:ro
+      - ./postgres-secrets/pragmatic-postgres:/run/secrets/pragmatic-postgres:ro
   redis:
     image: redis:7-alpine
     ports:
@@ -17,6 +28,7 @@ services:
       PRAGMATIC_ENVIRONMENTS_FILE: /cfg/environments.json
       PRAGMATIC_MASTER_KEY_FILE: /run/secrets/master_key
       PRAGMATIC_REDIS_URL: redis://redis:6379
+      PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE: /run/secrets/pragmatic-env-server/database-url
       PRAGMATIC_WORKER_ADVERTISE_HOST: worker1
       PRAGMATIC_WORKER_ADVERTISE_PORT: "8443"
       PRAGMATIC_TLS_CERT_FILE: /run/secrets/tls/server.pem
@@ -26,8 +38,10 @@ services:
       - ./environments.example.json:/cfg/environments.json:ro
       - ./master.key:/run/secrets/master_key:ro
       - ./tls:/run/secrets/tls:ro
+      - ./postgres-secrets/database-url:/run/secrets/pragmatic-env-server/database-url:ro
     depends_on:
       - redis
+      - pragmatic-postgres
   worker2:
     image: ghcr.io/pragmatic-tech-ai/pragmatic-env-server:${PRAGMATIC_ENV_SERVER_TAG:-0.1.0}
     command: ["node", "server/dist/bin/pragmatic-workerd.js"]
@@ -38,6 +52,7 @@ services:
       PRAGMATIC_ENVIRONMENTS_FILE: /cfg/environments.json
       PRAGMATIC_MASTER_KEY_FILE: /run/secrets/master_key
       PRAGMATIC_REDIS_URL: redis://redis:6379
+      PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE: /run/secrets/pragmatic-env-server/database-url
       PRAGMATIC_WORKER_ADVERTISE_HOST: worker2
       PRAGMATIC_WORKER_ADVERTISE_PORT: "8443"
       PRAGMATIC_TLS_CERT_FILE: /run/secrets/tls/server.pem
@@ -47,8 +62,10 @@ services:
       - ./environments.example.json:/cfg/environments.json:ro
       - ./master.key:/run/secrets/master_key:ro
       - ./tls:/run/secrets/tls:ro
+      - ./postgres-secrets/database-url:/run/secrets/pragmatic-env-server/database-url:ro
     depends_on:
       - redis
+      - pragmatic-postgres
   gateway:
     # The gateway is its own image (pragmatic-env-gateway); its entrypoint is pragmatic-gatewayd.
     image: ghcr.io/pragmatic-tech-ai/pragmatic-env-gateway:${PRAGMATIC_ENV_GATEWAY_TAG:-0.1.0}
@@ -67,3 +84,5 @@ services:
       - ./tls:/run/secrets/tls:ro
     depends_on:
       - redis
+volumes:
+  pragmatic-postgres-data:

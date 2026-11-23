@@ -9,12 +9,29 @@ services:
       PRAGMATIC_PORT: "8080"
       PRAGMATIC_ENVIRONMENTS_FILE: /cfg/environments.json
       PRAGMATIC_MASTER_KEY_FILE: /run/secrets/master_key
+      PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE: /run/secrets/pragmatic-env-server/database-url
     volumes:
       - pragmatic-data:/data
       - ./docker/environments.example.json:/cfg/environments.json:ro
       - ./docker/master.key:/run/secrets/master_key:ro
+      - ./docker/postgres-secrets/database-url:/run/secrets/pragmatic-env-server/database-url:ro
+    depends_on:
+      - pragmatic-postgres
+  # The env server's own Postgres (A5): one database and role from applications.conf, passwords from the gitignored
+  # docker/postgres-secrets folder (docker/compose-README.md). The server waits up to 60 s for it at start.
+  pragmatic-postgres:
+    image: ghcr.io/pragmatic-tech-ai/pragmatic-postgres:${PRAGMATIC_POSTGRES_TAG:-0.1.0}
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    volumes:
+      - pragmatic-postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres:/etc/pragmatic-postgres:ro
+      - ./docker/postgres-secrets/pragmatic-postgres:/run/secrets/pragmatic-postgres:ro
 # A Redis coordinator would attach here for the deferred multi-replica story:
 #  redis:
 #    image: redis:7
 volumes:
   pragmatic-data:
+  pragmatic-postgres-data:

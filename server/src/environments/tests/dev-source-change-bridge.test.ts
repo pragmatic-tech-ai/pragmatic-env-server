@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { ILanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
 import { PragmaticServer } from '../../pragmatic-server.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class BridgeServer extends PragmaticServer
 {
@@ -17,7 +18,7 @@ class BridgeServer extends PragmaticServer
 
 test('concurrent first DevSourceChangeBridge calls share one bridge', async () =>
 {
-    const server = new BridgeServer({})
+    const server = new BridgeServer({ platform: CustomPlatformFixture.Mem() })
     const [a, b] = await Promise.all([server.DevSourceChangeBridge(), server.DevSourceChangeBridge()])
     assert.equal(a, b)
     assert.equal(server.LanguageServiceCalls, 1)

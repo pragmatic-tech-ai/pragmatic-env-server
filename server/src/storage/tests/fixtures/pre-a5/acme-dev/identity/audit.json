@@ -1,0 +1,50 @@
+{
+  "events": [
+    {
+      "kind": 0,
+      "realmId": "acme-dev",
+      "principalId": "ann",
+      "at": "2026-11-01T10:00:00.000Z",
+      "detail": [
+        [
+          "method",
+          "password"
+        ]
+      ],
+      "hash": "c3020fa5c1a4f3cf6e0e4e7ea04033a006556320576df1cfe11f7fc278514e4f",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "kind": 2,
+      "realmId": "acme-dev",
+      "principalId": "ann",
+      "at": "2026-11-01T10:05:00.000Z",
+      "detail": [
+        [
+          "action",
+          "grant-role"
+        ]
+      ],
+      "hash": "7509de44d55dd25f2ee90250400ca4e09ec66c488b7d49a9fc1ae1dce16b2217",
+      "prevHash": "c3020fa5c1a4f3cf6e0e4e7ea04033a006556320576df1cfe11f7fc278514e4f"
+    },
+    {
+      "kind": 0,
+      "realmId": "acme-dev",
+      "principalId": null,
+      "at": "2026-11-01T10:06:00.000Z",
+      "detail": [
+        [
+          "method",
+          "password"
+        ],
+        [
+          "outcome",
+          "denied"
+        ]
+      ],
+      "hash": "7f45137a7a7f68e5ee492841fe6c893d553e80872fba0ba16511d795edffdbe1",
+      "prevHash": "7509de44d55dd25f2ee90250400ca4e09ec66c488b7d49a9fc1ae1dce16b2217"
+    }
+  ]
+}

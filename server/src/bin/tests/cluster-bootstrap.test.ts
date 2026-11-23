@@ -5,6 +5,7 @@ import { ServerBootstrap } from '../server-bootstrap.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import type { PlatformServices } from '../../platform/platform-services.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixture
 {
@@ -21,7 +22,7 @@ class Fixture
 
 test('ComposeWorkerOptions maps TLS, redis, advertise and health through', () =>
 {
-    const o = ServerBootstrap.ComposeWorkerOptions(Fixture.Config(), Fixture.Provisioning())
+    const o = ServerBootstrap.ComposeWorkerOptions(Fixture.Config(), Fixture.Provisioning(), CustomPlatformFixture.Mem())
     assert.deepEqual(o.tls, { certFile: '/c.pem', keyFile: '/k.pem', caFile: '/ca.pem' })
     assert.equal(o.redisUrl, 'redis://user:secret@r:6379')
     assert.equal(o.replicaId, 'pod-1')
@@ -34,7 +35,7 @@ test('ComposeWorkerOptions throws when TLS is absent (a worker requires mTLS)', 
 {
     const config = { ...Fixture.Config() }
     delete (config as { tls?: unknown }).tls
-    assert.throws(() => ServerBootstrap.ComposeWorkerOptions(config, Fixture.Provisioning()), /tls/i)
+    assert.throws(() => ServerBootstrap.ComposeWorkerOptions(config, Fixture.Provisioning(), CustomPlatformFixture.Mem()), /tls/i)
 })
 
 test('the worker startup line never leaks the redis URL or TLS key path', () =>
@@ -45,10 +46,9 @@ test('the worker startup line never leaks the redis URL or TLS key path', () =>
     assert.ok(w.includes('8443'))
 })
 
-test('ComposeWorkerOptions fails closed in cloud mode without a platform, and threads one through when given', () =>
+test('ComposeWorkerOptions threads the platform through', () =>
 {
     const config: ServerConfig = { ...Fixture.Config(), deploymentMode: DeploymentMode.Cloud }
-    assert.throws(() => ServerBootstrap.ComposeWorkerOptions(config, Fixture.Provisioning()), /cloud/i)
     const platform = {} as PlatformServices
     assert.equal(ServerBootstrap.ComposeWorkerOptions(config, Fixture.Provisioning(), platform).platform, platform)
 })

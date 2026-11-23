@@ -114,8 +114,8 @@ class CypherFx
         {
             await fx.Package(CypherFx.Crm.id, CypherFx.Crm.version, CypherFx.CrmTodl)
             await fx.Package(CypherFx.Ext.id, CypherFx.Ext.version, CypherFx.ExtTodl)
-            fx.Live(CypherFx.CrmApp, CypherFx.AppVersion, [CypherFx.Crm])
-            fx.Live(CypherFx.ExtApp, CypherFx.AppVersion, [CypherFx.Ext])
+            await fx.Live(CypherFx.CrmApp, CypherFx.AppVersion, [CypherFx.Crm])
+            await fx.Live(CypherFx.ExtApp, CypherFx.AppVersion, [CypherFx.Ext])
             fx.Source.Adapter.Seed(CypherFx.CustomerSource, [{ [CypherFx.CustomerKey]: CypherFx.AcmeKey, [CypherFx.NameField]: CypherFx.Acme }])
             await fx.Start(options)
             await body(fx)

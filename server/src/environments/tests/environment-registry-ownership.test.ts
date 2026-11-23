@@ -6,6 +6,7 @@ import { InMemoryEnvironmentCoordinator } from '../environment-coordinator.js'
 import { DeploymentMode } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import type { EnvironmentProvisioning } from '../environment-provisioning.js'
 import type { IWriteLock } from '../../host/cypher/write-lock.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class FakeOwnership implements IEnvironmentOwnership
 {
@@ -51,7 +52,7 @@ class Fixtures
     {
         const entries = new Map<string, EnvironmentProvisioning>([['acme', { displayName: 'Acme' }]])
         const provisioning = new InMemoryEnvironmentProvisioning(entries)
-        return new EnvironmentRegistry('C:/tmp/does-not-matter', { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning, new InMemoryEnvironmentCoordinator(), undefined, DeploymentMode.Local, ownership)
+        return new EnvironmentRegistry('C:/tmp/does-not-matter', { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning, new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem(), DeploymentMode.Local, ownership)
     }
 }
 

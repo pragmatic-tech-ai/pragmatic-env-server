@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ModuleStateKind } from '@pragmatic-tech-ai/todl-runtime'
 import { PragmaticServer } from '../pragmatic-server.js'
+import { CustomPlatformFixture } from '../platform/tests/custom-platform-fixture.js'
 
 /** Test helpers for the offline acceptance golden: temp dirs and a private copy of the read-only fixture. */
 class OpenGolden
@@ -55,7 +56,7 @@ test('opens a real on-disk solution and exposes it through the manager', async (
 {
     const packages = OpenGolden.PackagesDir()
     const solution = OpenGolden.OpenableSolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     try
     {
@@ -76,7 +77,7 @@ test('drives a domain query through the language service in-process', async () =
 {
     const packages = OpenGolden.PackagesDir()
     const solution = OpenGolden.OpenableSolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     try
     {
@@ -100,7 +101,7 @@ test('drives a domain query through the language service in-process', async () =
 test('OpenSolution on a non-existent location rejects with a clear error', async () =>
 {
     const packages = OpenGolden.PackagesDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     try
     {
@@ -117,7 +118,7 @@ test('concurrent opens of the same solution then Dispose drains and tears down c
 {
     const packages = OpenGolden.PackagesDir()
     const solution = OpenGolden.OpenableSolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     try
     {
@@ -142,7 +143,7 @@ test('concurrent opens of the same solution then Dispose drains and tears down c
 test('Dispose does not construct the language service when it was never built', async () =>
 {
     const packages = OpenGolden.PackagesDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     try
     {

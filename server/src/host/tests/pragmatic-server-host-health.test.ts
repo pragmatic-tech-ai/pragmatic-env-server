@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class HealthFixture
 {
@@ -38,7 +39,7 @@ test('a started host answers /healthz and /readyz with 200', async () =>
     const dir = mkdtempSync(join(tmpdir(), 'ph8-health-'))
     const keyPath = join(dir, 'key')
     writeFileSync(keyPath, randomBytes(32))
-    const host = await PragmaticServerHost.StartAsync({ port: 0, baseDir: dir, masterKey: { keyFilePath: keyPath }, provisioning: HealthFixture.Provisioning() })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), port: 0, baseDir: dir, masterKey: { keyFilePath: keyPath }, provisioning: HealthFixture.Provisioning() })
     try
     {
         const port = host.Address().port
@@ -57,7 +58,7 @@ test('an unknown path without an environment hint still 404s (health does not sh
     const dir = mkdtempSync(join(tmpdir(), 'ph8-health-'))
     const keyPath = join(dir, 'key')
     writeFileSync(keyPath, randomBytes(32))
-    const host = await PragmaticServerHost.StartAsync({ port: 0, baseDir: dir, masterKey: { keyFilePath: keyPath }, provisioning: HealthFixture.Provisioning() })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), port: 0, baseDir: dir, masterKey: { keyFilePath: keyPath }, provisioning: HealthFixture.Provisioning() })
     try
     {
         assert.equal(await HealthFixture.Get(host.Address().port, '/nope'), 404)

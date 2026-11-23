@@ -4,6 +4,7 @@ import { ServerBootstrap } from '../server-bootstrap.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import { DeploymentMode, type ServerConfig } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixtures
 {
@@ -20,7 +21,7 @@ class Fixtures
 
 test('ComposeOptions carries redisUrl and replicaId through', () =>
 {
-    const options = ServerBootstrap.ComposeOptions(Fixtures.Config({ redisUrl: 'redis://host:6379', replicaId: 'pod-1' }), Fixtures.Provisioning())
+    const options = ServerBootstrap.ComposeOptions(Fixtures.Config({ redisUrl: 'redis://host:6379', replicaId: 'pod-1' }), Fixtures.Provisioning(), CustomPlatformFixture.Mem())
     assert.equal(options.redisUrl, 'redis://host:6379')
     assert.equal(options.replicaId, 'pod-1')
 })

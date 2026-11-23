@@ -279,20 +279,6 @@ class EmulatorGcpGate
     }
 }
 
-test('cloud mode without a platform bundle still fails closed (the gap this stage closes)', () =>
-{
-    const fixture = new CloudBootFixture()
-    const baseDir = CloudBootFixture.MakeBaseDir()
-    try
-    {
-        assert.throws(() => ServerBootstrap.ComposeOptions(fixture.CloudConfig(baseDir), fixture.Provisioning(), undefined), /requires a configured platform/)
-    }
-    finally
-    {
-        CloudBootFixture.RemoveBaseDir(baseDir)
-    }
-})
-
 test('cloud mode boots end-to-end over an injected bundle and serves two isolated environments', async () =>
 {
     const fixture = new CloudBootFixture()

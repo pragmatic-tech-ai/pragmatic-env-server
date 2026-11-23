@@ -5,6 +5,7 @@ import { InMemoryEnvironmentCoordinator } from '../environment-coordinator.js'
 import { InMemoryEnvironmentProvisioning, EnvironmentRegistry } from '../environment-registry.js'
 import { EnvironmentPurpose } from '../environment-purpose.js'
 import { PragmaticServer } from '../../pragmatic-server.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class PurposeFixture
 {
@@ -15,7 +16,7 @@ class PurposeFixture
 
     public static Registry(): EnvironmentRegistry
     {
-        return new EnvironmentRegistry(PurposeFixture.BaseDir, { base64Env: PurposeFixture.KeyEnv }, new InMemoryEnvironmentProvisioning(new Map()), new InMemoryEnvironmentCoordinator())
+        return new EnvironmentRegistry(PurposeFixture.BaseDir, { base64Env: PurposeFixture.KeyEnv }, new InMemoryEnvironmentProvisioning(new Map()), new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem())
     }
 }
 
@@ -34,7 +35,7 @@ test('absent purpose defaults to Development', () =>
 
 test('a bare PragmaticServer is Development', () =>
 {
-    assert.equal(new PragmaticServer({}).Purpose(), EnvironmentPurpose.Development)
+    assert.equal(new PragmaticServer({ platform: CustomPlatformFixture.Mem() }).Purpose(), EnvironmentPurpose.Development)
 })
 
 test('ServesDevelopment / ServesRuntime across the provisioning shapes', () =>

@@ -17,12 +17,11 @@ export class EnvServerComponent
         options: [
             {
                 name: 'core',
-                description: 'The server process: listener, state folder, database, environments and master key.',
+                description: 'The server process: listener, state folder, environments and master key.',
                 settings: [
                     { name: 'host', type: SettingType.String, source: 'PRAGMATIC_HOST', default: '0.0.0.0', description: 'Address the listener binds.' },
                     { name: 'port', type: SettingType.Integer, source: 'PRAGMATIC_PORT', default: 8080, description: 'Port the listener binds.' },
                     { name: 'baseDir', type: SettingType.String, source: 'PRAGMATIC_BASE_DIR', required: true, description: 'The state folder.' },
-                    { name: 'databaseUrl', type: SettingType.String, source: 'PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE', required: true, secret: true, description: 'The URL of the server\'s own Postgres database, where every record of every environment it hosts lives (a mounted secret file; deploymentMode cloud uses the provider database of its option instead).' },
                     { name: 'deploymentMode', type: SettingType.String, source: 'PRAGMATIC_DEPLOYMENT_MODE', default: 'local', description: 'local or cloud.' },
                     { name: 'configFile', type: SettingType.String, source: 'PRAGMATIC_CONFIG_FILE', description: 'Optional JSON file with host, port, baseDir, deploymentMode, idle and Redis defaults.' },
                     { name: 'environmentsFile', type: SettingType.String, source: 'PRAGMATIC_ENVIRONMENTS_FILE', description: 'File listing the environments served (or set environmentId).' },
@@ -35,6 +34,13 @@ export class EnvServerComponent
                     { name: 'idleSweepMs', type: SettingType.Integer, source: 'PRAGMATIC_IDLE_SWEEP_MS', description: 'Interval of the idle sweep in milliseconds.' },
                     { name: 'drainTimeoutMs', type: SettingType.Integer, source: 'PRAGMATIC_DRAIN_TIMEOUT_MS', default: 25000, description: 'How long shutdown waits for connections to drain, in milliseconds.' },
                     { name: 'healthPort', type: SettingType.Integer, source: 'PRAGMATIC_HEALTH_PORT', description: 'Separate port for /healthz and /readyz (served on the main listener when unset).' },
+                ],
+            },
+            {
+                name: 'database',
+                description: 'The server\'s own Postgres database (deploymentMode local; cloud uses the provider database of its option).',
+                settings: [
+                    { name: 'databaseUrl', type: SettingType.String, source: 'PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE', required: true, secret: true, description: 'The URL of the server\'s own Postgres database, where every record of every environment it hosts lives (a mounted secret file; its content is never logged).' },
                 ],
             },
             {

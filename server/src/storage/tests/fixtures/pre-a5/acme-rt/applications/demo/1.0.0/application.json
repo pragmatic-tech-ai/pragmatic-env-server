@@ -1,0 +1,14 @@
+{
+  "name": "demo",
+  "version": "1.0.0",
+  "packages": [
+    {
+      "id": "hr",
+      "version": "1.0.0"
+    }
+  ],
+  "ui": {
+    "entry": "index.html",
+    "assets": []
+  }
+}

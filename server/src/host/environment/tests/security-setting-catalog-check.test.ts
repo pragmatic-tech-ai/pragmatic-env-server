@@ -65,7 +65,7 @@ describe('security setting catalog check', () =>
         {
             await fx.Package(ref.id, ref.version, todl)
         }
-        fx.Live(Tier1Fx.AppName, Tier1Fx.AppVersion, [Tier1Fx.Hr, Tier1Fx.Projects, Tier1Fx.Crm, Tier1Fx.Ext])
+        await fx.Live(Tier1Fx.AppName, Tier1Fx.AppVersion, [Tier1Fx.Hr, Tier1Fx.Projects, Tier1Fx.Crm, Tier1Fx.Ext])
         catalog = (await fx.Host().Snapshot()).Catalog
     })
 

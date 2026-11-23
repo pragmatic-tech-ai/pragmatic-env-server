@@ -12,16 +12,25 @@ import { MachineTls, type MachineTlsRef } from '@pragmatic-tech-ai/pragmatic-env
 import { WorkerHost } from '../worker-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
-import { NodePlatform } from '../../platform/node-platform.js'
+import { CustomPlatform } from '../../platform/custom-platform.js'
+import type { PlatformServices } from '../../platform/platform-services.js'
+import { EnvServerTestDatabase } from '../../storage/tests/env-server-test-database.js'
+import { NodeStorageProviderRegistry } from '@pragmatic-tech-ai/pragmatic-realm-custom'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
-class RecordingPlatform extends NodePlatform
+class RecordingPlatform extends CustomPlatform
 {
-    public identityRoots: string[] = []
+    public environmentIds: string[] = []
 
-    public override CreateIdentityStores(identityRoot: string, masterKey: Buffer): Promise<IdentityStoreSet>
+    public constructor()
     {
-        this.identityRoots.push(identityRoot)
-        return super.CreateIdentityStores(identityRoot, masterKey)
+        super(EnvServerTestDatabase.Mem(), new NodeStorageProviderRegistry())
+    }
+
+    public override CreateIdentityStores(environmentId: string, masterKey: Buffer): Promise<IdentityStoreSet>
+    {
+        this.environmentIds.push(environmentId)
+        return super.CreateIdentityStores(environmentId, masterKey)
     }
 }
 
@@ -64,9 +73,9 @@ class WorkerFixture
         return new InMemoryEnvironmentProvisioning(entries)
     }
 
-    public static Options(baseDir: string, provisioning: InMemoryEnvironmentProvisioning)
+    public static Options(baseDir: string, provisioning: InMemoryEnvironmentProvisioning, platform: PlatformServices = CustomPlatformFixture.Mem())
     {
-        return { host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: WorkerFixture.KeyEnv }, provisioning, tls: WorkerFixture.TlsRef() }
+        return { host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: WorkerFixture.KeyEnv }, provisioning, tls: WorkerFixture.TlsRef(), platform }
     }
 
     public static async TokenFor(worker: WorkerHost, environmentId: string): Promise<string>
@@ -170,8 +179,7 @@ test('a platform passed in the options is forwarded into the per-environment ser
     try
     {
         await WorkerFixture.TokenFor(worker, 't1')
-        assert.equal(platform.identityRoots.length, 1)
-        assert.ok(platform.identityRoots[0].includes('t1'))
+        assert.deepEqual(platform.environmentIds, ['t1'])
     }
     finally
     {

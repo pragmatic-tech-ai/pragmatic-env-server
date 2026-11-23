@@ -1,0 +1,14 @@
+{
+  "records": {
+    "hynNLWNEr_dftX8hm4y-HSNGXJu1rUB-BGv4GP7jcMs": {
+      "tokenRef": "acme-dev/svctok/hynNLWNEr_dftX8hm4y-HSNGXJu1rUB-BGv4GP7jcMs",
+      "principalId": "ci-bot",
+      "realmId": "acme-dev",
+      "scopes": [
+        "deploy"
+      ],
+      "expiresAt": null,
+      "revoked": false
+    }
+  }
+}

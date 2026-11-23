@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { newDb } from 'pg-mem'
 import { PragmaticServer } from '../pragmatic-server.js'
 import { DevConnectorRead } from '../host/engine/tests/dev-connector-read.js'
+import { CustomPlatformFixture } from '../platform/tests/custom-platform-fixture.js'
 
 /** Builds on-disk solution fixtures (exact schema of src/tests/fixtures/sample-solution) + a pg-mem pool.
  *  The connector model.todl is anchored on TODL/src/codegen/tests/connector-package-fixture.test.ts. */
@@ -65,7 +66,7 @@ test('a solution model with a SQL datasource reads its entities through the work
 {
     const dir = Phase6aGolden.ConnectorSolutionDir()
     const pool = Phase6aGolden.BuildPgMemPool()
-    const server = new PragmaticServer({ packagesRoot: join(dir, 'packages'), connectors: { buildPool: () => pool as never } })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: join(dir, 'packages'), connectors: { buildPool: () => pool as never } })
     try
     {
         await server.Start()
@@ -87,7 +88,7 @@ test('a solution model with a SQL datasource reads its entities through the work
 test('a solution with no datasource yields an empty connector model set', async () =>
 {
     const dir = Phase6aGolden.PlainSolutionDir()
-    const server = new PragmaticServer({ packagesRoot: join(dir, 'packages') })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: join(dir, 'packages') })
     try
     {
         await server.Start()

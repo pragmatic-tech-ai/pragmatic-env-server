@@ -20,7 +20,7 @@ export interface PragmaticAppManifest
     ui?: PragmaticAppUi
 }
 
-/** Fail-closed parser for an on-disk `application.json`. */
+/** Fail-closed parser of an application manifest (stored in the registry; the legacy `application.json` files the importer reads). */
 export class PragmaticAppManifestParser
 {
     private static readonly NameField = 'name'

@@ -12,6 +12,7 @@ import type { EnvironmentProvisioning } from '../../environments/environment-pro
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
 import type { ILogger, LogFields } from '@pragmatic-tech-ai/pragmatic-observability'
 import type { IAccessAuditSink, AccessAuditEvent } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class CapturingLogger implements ILogger
 {
@@ -71,6 +72,7 @@ class CookieFixture
             bootstrap: { adminEmail: CookieFixture.Email, adminPrincipalId: 'admin', adminPasswordRef: 't1-admin-pw', ownerGrant: true },
         }]])
         this.host = await PragmaticServerHost.StartAsync({
+            platform: CustomPlatformFixture.Mem(),
             host: '127.0.0.1',
             port: 0,
             baseDir: this.baseDir,

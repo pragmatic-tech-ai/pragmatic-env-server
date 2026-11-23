@@ -8,6 +8,7 @@ import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role,
 import type { SolutionLanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 interface IDisposeCounter
 {
@@ -39,7 +40,7 @@ class Harness
 
     public static async Create(): Promise<Harness>
     {
-        const server = new PragmaticServer({ packagesRoot: mkdtempSync(join(tmpdir(), 'ps-pkgs-revoke-')) })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: mkdtempSync(join(tmpdir(), 'ps-pkgs-revoke-')) })
         await server.Start()
         const service = (await server.LanguageService()) as SolutionLanguageService
         const manager = await server.Manager()

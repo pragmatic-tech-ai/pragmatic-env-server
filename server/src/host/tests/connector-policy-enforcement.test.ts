@@ -8,6 +8,7 @@ import { DataSourceKind } from '@pragmatic-tech-ai/todl'
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ConnectorsPolicy } from '../connector-policy.js'
 import { DevConnectorRead } from '../engine/tests/dev-connector-read.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixture
 {
@@ -55,7 +56,7 @@ namespace shop {
     {
         const dir = Fixture.SolutionDir()
         const pool = Fixture.Pool()
-        const server = new PragmaticServer({ packagesRoot: join(dir, Fixture.PackagesDir), connectors: { buildPool: () => pool as never }, connectorsPolicy: policy })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: join(dir, Fixture.PackagesDir), connectors: { buildPool: () => pool as never }, connectorsPolicy: policy })
         try
         {
             await server.Start()

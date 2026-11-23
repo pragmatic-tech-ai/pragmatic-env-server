@@ -14,6 +14,7 @@ import { InMemoryEnvironmentProvisioning } from '../../environments/environment-
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
 import type { SolutionLanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 /** One dev environment on a worker, its solution holding one widget instance in model acme.Shop. */
 class DevWorkerFx
@@ -128,7 +129,7 @@ class DevWorkerFx
 test('worker host serves dev graph endpoints', async () =>
 {
     const baseDir = DevWorkerFx.Start()
-    const worker = await WorkerHost.StartAsync({ host: DevWorkerFx.LocalHost, port: 0, baseDir, masterKey: { base64Env: DevWorkerFx.KeyEnv }, provisioning: DevWorkerFx.Provisioning(), tls: DevWorkerFx.Tls(DevWorkerFx.ServerTls) })
+    const worker = await WorkerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: DevWorkerFx.LocalHost, port: 0, baseDir, masterKey: { base64Env: DevWorkerFx.KeyEnv }, provisioning: DevWorkerFx.Provisioning(), tls: DevWorkerFx.Tls(DevWorkerFx.ServerTls) })
     try
     {
         const token = await DevWorkerFx.TokenFor(worker)

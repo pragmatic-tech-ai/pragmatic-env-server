@@ -11,6 +11,7 @@ import { PragmaticServer, type PragmaticServerIdentityOptions } from '../../prag
 import { MachinePrincipalMap } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
 import { ResolverFixture } from './resolver-fixture.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class ModuleFixture
 {
@@ -19,7 +20,6 @@ class ModuleFixture
     public static readonly LocalPackId = 'local'
     private static readonly KeyEnv = 'PS_MODULE_RESOLVER_KEY'
 
-    private readonly identityRoot = mkdtempSync(join(tmpdir(), 'ps-mr-id-'))
     private readonly packagesRoot = mkdtempSync(join(tmpdir(), 'ps-mr-pkg-'))
 
     public constructor()
@@ -30,7 +30,6 @@ class ModuleFixture
     public Identity(extra: Partial<PragmaticServerIdentityOptions>): PragmaticServerIdentityOptions
     {
         return {
-            identityRoot: this.identityRoot,
             masterKey: { base64Env: ModuleFixture.KeyEnv },
             environment: { id: 't1', displayName: 'Environment One' },
             ...extra,
@@ -39,12 +38,11 @@ class ModuleFixture
 
     public Server(identity: PragmaticServerIdentityOptions): PragmaticServer
     {
-        return new PragmaticServer({ packagesRoot: this.packagesRoot, identity })
+        return new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: this.packagesRoot, identity })
     }
 
     public Dispose(): void
     {
-        rmSync(this.identityRoot, { recursive: true, force: true })
         rmSync(this.packagesRoot, { recursive: true, force: true })
         delete process.env[ModuleFixture.KeyEnv]
     }

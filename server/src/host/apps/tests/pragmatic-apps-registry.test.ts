@@ -1,150 +1,79 @@
-import { test } from 'node:test'
+import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { NodeFsStorage } from '@pragmatic-tech-ai/todl-runtime/node'
-import { PragmaticAppsRegistry } from '../pragmatic-apps-registry.js'
-import { PragmaticAppManifestParser } from '../pragmatic-app-manifest.js'
+import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/testing'
+import { EnvServerDatabase } from '../../../storage/env-server-database.js'
+import { EnvServerRegistry } from '../../../storage/env-server-registry.js'
+import { EnvironmentRecords } from '../../../storage/environment-records.js'
+import { PragmaticAppsRegistry, type ApplicationRecord } from '../pragmatic-apps-registry.js'
+import type { PragmaticAppManifest } from '../pragmatic-app-manifest.js'
 
 class AppsFixture
 {
-    private static readonly Prefix = 'apps-'
-    private static readonly ManifestFile = 'application.json'
-    private static readonly DemoManifest = '{"name":"demo","version":"1.0.0","packages":[{"id":"acme.catalog","version":"1.0.0"}]}'
+    public static readonly Environment = 'rt-1'
 
-    public readonly Dir = mkdtempSync(join(tmpdir(), AppsFixture.Prefix))
-
-    public AddApp(name: string, manifest: string = AppsFixture.DemoManifest): void
+    public static Records(database: EnvServerDatabase, environment: string = AppsFixture.Environment): EnvironmentRecords<ApplicationRecord>
     {
-        mkdirSync(join(this.Dir, name))
-        writeFileSync(join(this.Dir, name, AppsFixture.ManifestFile), manifest)
+        return new EnvironmentRecords<ApplicationRecord>(database, EnvServerRegistry.Applications, environment)
     }
 
-    public Registry(): PragmaticAppsRegistry
+    public static Registry(database: EnvServerDatabase, environment: string = AppsFixture.Environment): PragmaticAppsRegistry
     {
-        return new PragmaticAppsRegistry(new NodeFsStorage(this.Dir))
+        return new PragmaticAppsRegistry(AppsFixture.Records(database, environment))
     }
 
-    public Dispose(): void
+    public static Manifest(name: string, version: string): PragmaticAppManifest
     {
-        rmSync(this.Dir, { recursive: true, force: true })
+        return { name, version, packages: [{ id: 'acme.catalog', version: '1.0.0' }] }
     }
 }
 
-test('List returns name and version of each application', async () =>
+SqlTestSessions.Describe('PragmaticAppsRegistry', (makeSession, label) =>
 {
-    const f = new AppsFixture()
-    try
+    describe(label, () =>
     {
-        f.AddApp('demo')
-        assert.deepEqual(await f.Registry().List(), [{ name: 'demo', version: '1.0.0' }])
-    }
-    finally { f.Dispose() }
-})
+        it('Commit adds the version and moves live; List and ApplicationFor read the live manifest', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const registry = AppsFixture.Registry(database)
+            await registry.Commit(AppsFixture.Manifest('demo', '1.0.0'))
+            await registry.Commit(AppsFixture.Manifest('demo', '2.0.0'))
+            await registry.Commit(AppsFixture.Manifest('other', '1.0.0'))
+            assert.deepEqual(await registry.List(), [{ name: 'demo', version: '2.0.0' }, { name: 'other', version: '1.0.0' }])
+            assert.equal((await registry.ApplicationFor('demo')).Manifest.version, '2.0.0')
+            assert.equal(await registry.LiveVersion('demo'), '2.0.0')
+            assert.deepEqual(await registry.ManifestOf('demo', '1.0.0'), AppsFixture.Manifest('demo', '1.0.0'), 'earlier versions are kept')
+            assert.equal(await registry.ManifestOf('demo', '3.0.0'), undefined)
+            assert.deepEqual((await AppsFixture.Registry(database).LiveApplications()).map(a => a.Manifest.name), ['demo', 'other'], 'survives a restart')
+        })
 
-test('ApplicationFor loads the manifest', async () =>
-{
-    const f = new AppsFixture()
-    try
-    {
-        f.AddApp('demo')
-        const app = await f.Registry().ApplicationFor('demo')
-        assert.equal(app.Manifest.packages[0].id, 'acme.catalog')
-    }
-    finally { f.Dispose() }
-})
+        it('ApplicationFor rejects an unknown application and a traversal name', async () =>
+        {
+            const registry = AppsFixture.Registry(EnvServerDatabase.Over(await makeSession()))
+            await assert.rejects(registry.ApplicationFor('missing'), /application not found/)
+            await assert.rejects(registry.ApplicationFor('../x'), /invalid application name/)
+            assert.equal(await registry.LiveApplicationFor('..'), undefined)
+        })
 
-test('ApplicationFor rejects an unknown application', async () =>
-{
-    const f = new AppsFixture()
-    try
-    {
-        await assert.rejects(f.Registry().ApplicationFor('missing'), /not found/)
-    }
-    finally { f.Dispose() }
-})
+        it('a record with no live version, a dangling pointer or a malformed manifest is not live, the others still list', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const records = AppsFixture.Records(database)
+            await records.Put({ id: 'none', live: null, versions: { '1.0.0': AppsFixture.Manifest('none', '1.0.0') } })
+            await records.Put({ id: 'dangling', live: '9.9.9', versions: {} })
+            await records.Put({ id: 'corrupt', live: '1.0.0', versions: { '1.0.0': { name: '', version: '1.0.0' } as unknown as PragmaticAppManifest } })
+            await records.Put({ id: 'unsafe', live: '../1', versions: { '../1': AppsFixture.Manifest('unsafe', '../1') } })
+            const registry = AppsFixture.Registry(database)
+            await registry.Commit(AppsFixture.Manifest('good', '1.0.0'))
+            assert.deepEqual(await registry.List(), [{ name: 'good', version: '1.0.0' }])
+            assert.equal(await registry.LiveApplicationFor('corrupt'), undefined)
+        })
 
-test('malformed manifest fails closed', async () =>
-{
-    const f = new AppsFixture()
-    try
-    {
-        f.AddApp('bad', '{"name":"demo"}')
-        await assert.rejects(f.Registry().ApplicationFor('bad'))
-        assert.throws(() => PragmaticAppManifestParser.Parse('{"name":"demo","version":"1","packages":[{"id":""}]}'))
-        assert.throws(() => PragmaticAppManifestParser.Parse('not json'))
-    }
-    finally { f.Dispose() }
-})
-
-test('ApplicationFor rejects traversal names before touching storage', async () =>
-{
-    const f = new AppsFixture()
-    try
-    {
-        f.AddApp('demo')
-        await assert.rejects(f.Registry().ApplicationFor('../identity'), /invalid application name/)
-        await assert.rejects(f.Registry().ApplicationFor('..\\identity'), /invalid application name/)
-        await assert.rejects(f.Registry().ApplicationFor('..'), /invalid application name/)
-    }
-    finally { f.Dispose() }
-})
-
-test('List skips a subdirectory without application.json', async () =>
-{
-    const f = new AppsFixture()
-    try
-    {
-        f.AddApp('demo')
-        mkdirSync(join(f.Dir, 'empty'))
-        assert.deepEqual(await f.Registry().List(), [{ name: 'demo', version: '1.0.0' }])
-    }
-    finally { f.Dispose() }
-})
-
-test('List fails closed when one manifest is malformed', async () =>
-{
-    const f = new AppsFixture()
-    try
-    {
-        f.AddApp('demo')
-        f.AddApp('bad', '{"name":"bad"}')
-        await assert.rejects(f.Registry().List())
-    }
-    finally { f.Dispose() }
-})
-
-test('List skips an app with a garbage live pointer and still lists the others', async () =>
-{
-    const f = new AppsFixture()
-    try
-    {
-        f.AddApp('demo')
-        mkdirSync(join(f.Dir, 'broken'))
-        writeFileSync(join(f.Dir, 'broken', 'live'), '../..')
-        mkdirSync(join(f.Dir, 'empty'))
-        writeFileSync(join(f.Dir, 'empty', 'live'), '')
-        const list = await f.Registry().List()
-        assert.deepEqual(list.map(a => a.name), ['demo'])
-    }
-    finally
-    {
-        f.Dispose()
-    }
-})
-
-test('List falls back to the legacy manifest when the live pointer is garbage', async () =>
-{
-    const f = new AppsFixture()
-    try
-    {
-        f.AddApp('demo')
-        writeFileSync(join(f.Dir, 'demo', 'live'), '../bad')
-        assert.deepEqual((await f.Registry().List()).map(a => a.name), ['demo'])
-    }
-    finally
-    {
-        f.Dispose()
-    }
+        it('two environments keep their own applications', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            await AppsFixture.Registry(database, 'rt-a').Commit(AppsFixture.Manifest('demo', '1.0.0'))
+            assert.deepEqual(await AppsFixture.Registry(database, 'rt-b').List(), [])
+            assert.equal(await AppsFixture.Registry(database, 'rt-b').LiveApplicationFor('demo'), undefined)
+        })
+    })
 })

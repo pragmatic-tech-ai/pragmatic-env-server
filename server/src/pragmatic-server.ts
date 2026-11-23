@@ -10,7 +10,7 @@ import { DataSourceAdapterCatalog, SolutionManagerService, StoragePackageSource,
 import { NodeProjectSystemComposer } from '@pragmatic-tech-ai/todl/project-system'
 import { SolutionLanguageService, type ILanguageService } from '@pragmatic-tech-ai/todl/solution-services/lsp'
 import { SolutionServicesModule, LanguageServiceModule } from './composition/server-modules.js'
-import { type MasterKeyRef, type MachinePrincipalMap, DeploymentMode, SandboxStrategy, type AdapterPacksConfig } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { type MasterKeyRef, type MachinePrincipalMap, type DeploymentMode, SandboxStrategy, type AdapterPacksConfig } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import type { IProvisionedSecretSource } from './config/provisioned-secret-source.js'
 import { RealmConfigStoreKey, type Realm, type IdentityConfig, type IRealmConfigStore, type AccessContext, IdpDirectorySync } from '@pragmatic-tech-ai/pragmatic-identity'
 import type { ServerIdentityPack } from '@pragmatic-tech-ai/pragmatic-identity-store'
@@ -18,7 +18,6 @@ import { UpstreamTokenVault, type IHttpClient, type IOidcFlowStateStore } from '
 import type { OidcFrontDoor } from './host/auth-http-endpoint.js'
 import { IdentityModule } from './identity/identity-module.js'
 import { ServerBootstrap } from './identity/server-bootstrap.js'
-import { PlatformSelector } from './platform/platform-selector.js'
 import type { PlatformServices } from './platform/platform-services.js'
 import { ConnectorsHost, NpmAdapterPackProvider, WorkerThreadSandboxFactory, ChildProcessSandboxFactory, SqlAdapterFactory, RestAdapterFactory, CypherAdapterFactory, DocumentAdapterFactory, type ConnectorsHostOptions } from '@pragmatic-tech-ai/pragmatic-connectors-host'
 import { CallerCredentialAdapterProvider } from './host/connectors/caller-credential-adapter-factory.js'
@@ -48,6 +47,8 @@ import { DevScopeRules } from './host/engine/dev-scope-rules.js'
 import { EngineCypherQuery } from './host/engine/engine-cypher-query.js'
 import { DevModelView, LoggerDevModelViewDiagnostics } from './host/engine/dev-model-view.js'
 import { PromoteRecordStore } from './host/environment/promote-record-store.js'
+import { EnvironmentRecords } from './storage/environment-records.js'
+import { EnvServerRegistry } from './storage/env-server-registry.js'
 import { EnvironmentDeliveries } from './host/environment/environment-deliveries.js'
 import { EnvironmentEngineHost, EnvironmentUpgradeFailedError, LoggerEnvironmentDiagnostics, type IEnvironmentGraphHost } from './host/environment/environment-engine-host.js'
 import { EnvironmentCypherExecute } from './host/environment/environment-cypher-execute.js'
@@ -88,7 +89,6 @@ export interface BootstrapOptions
 
 export interface PragmaticServerIdentityOptions
 {
-    identityRoot: string
     masterKey: MasterKeyRef
     environment: { id: string; displayName: string }
     oidc?: OidcServerOptions
@@ -119,7 +119,11 @@ export interface PragmaticServerOptions
     solutionsRoot?: string
     identity?: PragmaticServerIdentityOptions
     deploymentMode?: DeploymentMode
-    platform?: PlatformServices
+    /** The platform bundle: blob storage, prompts, the master key and the env server's database (required: every
+     *  record lives in the database, A5). */
+    platform: PlatformServices
+    /** The environment the server's records are keyed by when it has no identity options (which carry it otherwise). */
+    environmentId?: string
     connectors?: ConnectorsHostOptions
     connectorsPolicy?: ConnectorsPolicy
     readonly adapterPacks?: AdapterPacksConfig
@@ -134,6 +138,19 @@ export interface PragmaticServerOptions
      * replaces the built-in one of its kind); absent => the built-ins only. Test sources plug in here.
      */
     adapterFactories?: readonly IDataSourceAdapterFactory[]
+}
+
+/** A server composed without an environment id touched its records. */
+export class EnvironmentIdRequiredError extends Error
+{
+    private static readonly ErrorName = 'EnvironmentIdRequiredError'
+    private static readonly Text = 'the server has no environment id (identity.environment.id or environmentId) to key its records by'
+
+    public constructor()
+    {
+        super(EnvironmentIdRequiredError.Text)
+        this.name = EnvironmentIdRequiredError.ErrorName
+    }
 }
 
 /** Headless single-environment in-process host: composes the engine over the lazy root and opens a solution. */
@@ -200,7 +217,7 @@ export class PragmaticServer implements IEnvironmentGraphHost
     public constructor(options: PragmaticServerOptions)
     {
         this.options = options
-        this.platform = PlatformSelector.Resolve(options.platform, options.deploymentMode ?? DeploymentMode.Local)
+        this.platform = options.platform
         this.identity = options.identity === undefined ? undefined : new IdentityModule(options.identity, this.platform)
         const builder = LazyCompositionRoot.Builder(HostKinds.Server)
             .Module(new SolutionServicesModule())
@@ -446,9 +463,22 @@ export class PragmaticServer implements IEnvironmentGraphHost
         return this.platform.CreateStorage(this.options.packagesRoot ?? PragmaticServer.DefaultPackagesDir)
     }
 
-    public GraphsStorage(): IStorage
+    /** The id this server's records are keyed by in the env server database: its environment's (= realm) id; a server
+     *  composed without one refuses to touch records (two such servers would share them). */
+    public EnvironmentId(): string
     {
-        return this.platform.CreateStorage(this.options.graphsRoot ?? PragmaticServer.DefaultGraphsDir)
+        const id = this.options.identity?.environment.id ?? this.options.environmentId
+        if (id === undefined)
+        {
+            throw new EnvironmentIdRequiredError()
+        }
+        return id
+    }
+
+    /** This environment's records in one registry of the env server database. */
+    public Records<T extends { id: string }>(registry: EnvServerRegistry): EnvironmentRecords<T>
+    {
+        return new EnvironmentRecords<T>(this.platform.Database, registry, this.EnvironmentId())
     }
 
     /**
@@ -458,7 +488,7 @@ export class PragmaticServer implements IEnvironmentGraphHost
     public async DeployApplication(params: CypherAppDeployParamsDto): Promise<AppDeployResultDto>
     {
         this.AssertRuntimePurpose()
-        this.appIngest ??= new AppIngestService(this.PackagesStorage(), this.AppsStorage(), this.EnvironmentEngine(), StructuredLogger.ToStdout())
+        this.appIngest ??= new AppIngestService(this.PackagesStorage(), this.AppsStorage(), this.Applications(), this.EnvironmentEngine(), StructuredLogger.ToStdout())
         return this.appIngest.Ingest(params)
     }
 
@@ -466,7 +496,7 @@ export class PragmaticServer implements IEnvironmentGraphHost
     public GraphService(): IDevGraphService
     {
         this.AssertDevelopmentPurpose()
-        this.devGraphService ??= new DevGraphService(new DevGraphStore(this.GraphsStorage()), new GraphPackageIngest(this.PackagesStorage()), new GraphPackageReader(this.PackagesStorage()))
+        this.devGraphService ??= new DevGraphService(new DevGraphStore(this.Records(EnvServerRegistry.DevGraphs)), new GraphPackageIngest(this.PackagesStorage()), new GraphPackageReader(this.PackagesStorage()))
         return this.devGraphService
     }
 
@@ -506,7 +536,7 @@ export class PragmaticServer implements IEnvironmentGraphHost
         }
     }
 
-    /** The promote record (`graphs/loaded-graph.json`, ruling S3): survives a restart; null when nothing was ever promoted. */
+    /** The promote record (its record in the env server database, ruling S3): survives a restart; null when nothing was ever promoted. */
     public async LoadedGraph(): Promise<GraphLoadedDto | null>
     {
         return this.PromoteRecords().Read()
@@ -667,13 +697,13 @@ export class PragmaticServer implements IEnvironmentGraphHost
     }
 
     /**
-     * The environment's security change log (`graphs/security-changes.json`, S4 Task 13): the security changes of the
+     * The environment's security change log (its record in the env server database, S4 Task 13): the security changes of the
      * deploys and promotes that changed any, newest first. Memoized; runtime environments only.
      */
     public SecurityChangeLog(): SecurityChangeLog
     {
         this.AssertRuntimePurpose()
-        this.securityChangeLog ??= new SecurityChangeLog(this.GraphsStorage(), new LoggerSecurityChangeLogDiagnostics(this.options.logger ?? StructuredLogger.ToStdout()))
+        this.securityChangeLog ??= new SecurityChangeLog(this.Records(EnvServerRegistry.SecurityChanges), new LoggerSecurityChangeLogDiagnostics(this.options.logger ?? StructuredLogger.ToStdout()))
         return this.securityChangeLog
     }
 
@@ -700,7 +730,7 @@ export class PragmaticServer implements IEnvironmentGraphHost
 
     private async BuildDeliverySecurity(): Promise<DeliverySecurity>
     {
-        return new DeliverySecurity(await this.SecuritySetting(), this.SecurityChangeLog(), () => this.SystemPrincipal(), new PendingBackfillStore(this.GraphsStorage(), new LoggerPendingBackfillDiagnostics(this.options.logger ?? StructuredLogger.ToStdout())))
+        return new DeliverySecurity(await this.SecuritySetting(), this.SecurityChangeLog(), () => this.SystemPrincipal(), new PendingBackfillStore(this.Records(EnvServerRegistry.PendingBackfill), new LoggerPendingBackfillDiagnostics(this.options.logger ?? StructuredLogger.ToStdout())))
     }
 
     /** Revokes a principal's per-user source credentials (R27): the auth endpoint calls it on sign-out. */
@@ -738,10 +768,10 @@ export class PragmaticServer implements IEnvironmentGraphHost
         return this.environmentRules!
     }
 
-    /** The environment's promote record (`graphs/loaded-graph.json`, ruling S3). */
+    /** The environment's promote record (its record in the env server database, ruling S3). */
     private PromoteRecords(): PromoteRecordStore
     {
-        this.promoteRecords ??= new PromoteRecordStore(this.GraphsStorage())
+        this.promoteRecords ??= new PromoteRecordStore(this.Records(EnvServerRegistry.LoadedGraph))
         return this.promoteRecords
     }
 
@@ -766,7 +796,7 @@ export class PragmaticServer implements IEnvironmentGraphHost
     public Applications(): PragmaticAppsRegistry
     {
         this.AssertRuntimePurpose()
-        this.appsRegistry ??= new PragmaticAppsRegistry(this.AppsStorage())
+        this.appsRegistry ??= new PragmaticAppsRegistry(this.Records(EnvServerRegistry.Applications))
         return this.appsRegistry
     }
 

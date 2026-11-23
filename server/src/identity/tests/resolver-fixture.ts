@@ -1,12 +1,9 @@
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { DelegationDepth, IdentityConfig, Realm, RealmKind } from '@pragmatic-tech-ai/pragmatic-identity'
 import type { IdentityStoreSet, Role } from '@pragmatic-tech-ai/pragmatic-identity'
 import { InMemoryOidcFlowStateStore, OidcSettingKeys } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
 import { FakeOidcHttpClient, FakeOidcIdp } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc/testing'
-import { NodePlatform } from '../../platform/node-platform.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 import { IdentityPackResolver } from '../identity-pack-resolver.js'
 
 export class ResolverFixture
@@ -20,26 +17,20 @@ export class ResolverFixture
     public static readonly Group = 'group-ed'
     public static readonly AuthCode = 'auth-code'
     public static readonly BearerType = 'Bearer'
-    private static readonly TempPrefix = 'ps7-'
+    private static readonly EnvironmentId = 'ps7'
     private static readonly RealmIdPrefix = 't-'
     private static readonly DiscoveryPath = '/.well-known/openid-configuration'
 
-    private roots: string[] = []
-
-    public async Stores(): Promise<IdentityStoreSet>
+    /** Fresh identity stores over their own in-memory database. */
+    /** A fresh store set for one environment (its sessions and grants are scoped to it). */
+    public async Stores(environmentId: string = ResolverFixture.EnvironmentId): Promise<IdentityStoreSet>
     {
-        const root = mkdtempSync(join(tmpdir(), ResolverFixture.TempPrefix))
-        this.roots.push(root)
-        return new NodePlatform().CreateIdentityStores(root, randomBytes(32))
+        return CustomPlatformFixture.Mem().CreateIdentityStores(environmentId, randomBytes(32))
     }
 
+    /** Nothing to release: every store set lives in its own in-memory database. */
     public Dispose(): void
     {
-        for (const root of this.roots)
-        {
-            rmSync(root, { recursive: true, force: true })
-        }
-        this.roots = []
     }
 
     public EntraSettings(): Map<string, string>
@@ -77,9 +68,9 @@ export class ResolverFixture
         const idp = await FakeOidcIdp.Create(issuer)
         const http = new FakeOidcHttpClient(idp)
         const flowStates = new InMemoryOidcFlowStateStore()
-        const stores = await this.Stores()
-        const config = new IdentityConfig(packId, depth, settings, groupRoleMap, new Map())
         const realm = new Realm(ResolverFixture.RealmIdPrefix + packId, RealmKind.Saas, packId)
+        const stores = await this.Stores(realm.Id)
+        const config = new IdentityConfig(packId, depth, settings, groupRoleMap, new Map())
         const resolver = new IdentityPackResolver(http, flowStates)
         const resolved = resolver.Resolve(realm, config, stores)
         const begun = await resolved.Oidc!.BeginAuthorization(realm)

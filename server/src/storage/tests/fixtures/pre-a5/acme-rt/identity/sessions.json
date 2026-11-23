@@ -1,0 +1,10 @@
+{
+  "sessions": {
+    "9VuTSgUSgKv7Ak470vPct9U8k6KWqtzNY5s9nASaeYs": {
+      "principalId": "rita",
+      "realmId": "acme-rt",
+      "issuedAt": "2026-11-23T10:25:13.328Z",
+      "expiresAt": "2026-11-23T11:25:13.328Z"
+    }
+  }
+}

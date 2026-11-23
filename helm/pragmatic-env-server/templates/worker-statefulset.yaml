@@ -66,6 +66,8 @@ spec:
               value: {{ .Values.deploymentMode | quote }}
             - name: PRAGMATIC_ENVIRONMENTS_FILE
               value: /cfg/environments.json
+            - name: PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE
+              value: /run/secrets/pragmatic-env-server/database-url
             - name: PRAGMATIC_MASTER_KEY_B64_ENV
               value: PRAGMATIC_MASTER_KEY
             - name: PRAGMATIC_MASTER_KEY
@@ -146,6 +148,9 @@ spec:
             - name: config
               mountPath: /cfg
               readOnly: true
+            - name: database-url
+              mountPath: /run/secrets/pragmatic-env-server
+              readOnly: true
             - name: tls
               mountPath: {{ .Values.cluster.tls.mountPath }}
               readOnly: true
@@ -160,6 +165,14 @@ spec:
         - name: config
           configMap:
             name: {{ include "pragmatic-server.fullname" . }}
+        # The env server's own Postgres database (A5): the Secret holding its URL, never inlined.
+        - name: database-url
+          secret:
+            secretName: {{ required "database.urlSecret is required: the Secret holding the env server database URL" .Values.database.urlSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.database.urlKey }}
+                path: database-url
         - name: tls
           secret:
             secretName: {{ required "cluster.tls.existingSecret is required when cluster.enabled" .Values.cluster.tls.existingSecret }}

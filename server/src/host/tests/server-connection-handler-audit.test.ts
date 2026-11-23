@@ -9,6 +9,7 @@ import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role,
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { AuditOutcome, type IAccessAuditSink, type AccessAuditEvent } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class CapturingSink implements IAccessAuditSink
 {
@@ -53,7 +54,7 @@ test('a guarded RPC through the real handler emits one audit event via the threa
     const sink = new CapturingSink()
     const packages = mkdtempSync(join(tmpdir(), 'ps-pkgs-'))
     const solution = Fixtures.SolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()
@@ -86,7 +87,7 @@ test('an unauthorized RPC through the real handler emits exactly one Deny event'
     const sink = new CapturingSink()
     const packages = mkdtempSync(join(tmpdir(), 'ps-pkgs-'))
     const solution = Fixtures.SolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()

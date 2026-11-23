@@ -11,6 +11,7 @@ import type { MessageConnection } from '@pragmatic-tech-ai/pragmatic-protocol'
 import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class AdminHostFixture
 {
@@ -44,7 +45,7 @@ class AdminHostFixture
     {
         process.env[AdminHostFixture.KeyEnv] = randomBytes(32).toString('base64')
         const entries = new Map<string, EnvironmentProvisioning>([[AdminHostFixture.EnvironmentId, { displayName: AdminHostFixture.EnvironmentDisplayName }]])
-        this.Host = await PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir: this.Dir, masterKey: { base64Env: AdminHostFixture.KeyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries) })
+        this.Host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir: this.Dir, masterKey: { base64Env: AdminHostFixture.KeyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries) })
     }
 
     public async ConnectAs(role: Role): Promise<MessageConnection>

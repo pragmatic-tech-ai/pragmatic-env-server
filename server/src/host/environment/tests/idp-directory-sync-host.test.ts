@@ -313,11 +313,12 @@ describe('idp directory sync host', () =>
             assert.equal(await (await fx.Server.Pack()).IdpDirectory.Get(EnvironmentFixture.EnvironmentId), null, 'no snapshot is stored before the restart')
             await fx.Server.Dispose()
             restarted = new PragmaticServer({
+                platform: fx.Platform,
                 purpose: EnvironmentPurpose.Runtime,
                 packagesRoot: fx.PackagesDir,
                 applicationsRoot: fx.AppsDir,
                 graphsRoot: fx.GraphsDir,
-                identity: { identityRoot: fx.IdentityDir, masterKey: { base64Env: EnvironmentFixture.KeyEnv }, environment: { id: EnvironmentFixture.EnvironmentId, displayName: SyncStartFx.DisplayName } },
+                identity: { masterKey: { base64Env: EnvironmentFixture.KeyEnv }, environment: { id: EnvironmentFixture.EnvironmentId, displayName: SyncStartFx.DisplayName } },
             })
             await restarted.Start()
             const store = (await restarted.Pack()).IdpDirectory

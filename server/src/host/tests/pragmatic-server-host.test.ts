@@ -11,6 +11,7 @@ import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import type { PragmaticServerHostOptions } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class HostFixture
 {
@@ -42,7 +43,7 @@ class HostFixture
     {
         process.env[HostFixture.KeyEnv] = randomBytes(32).toString('base64')
         const entries = new Map<string, EnvironmentProvisioning>([['t1', { displayName: 'Environment One' }]])
-        return { host: HostFixture.Host, port: 0, baseDir, masterKey: { base64Env: HostFixture.KeyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries) }
+        return { host: HostFixture.Host, port: 0, baseDir, masterKey: { base64Env: HostFixture.KeyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries), platform: CustomPlatformFixture.Mem() }
     }
 
     public static async Token(host: PragmaticServerHost): Promise<string>

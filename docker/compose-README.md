@@ -18,17 +18,26 @@ or, without a POSIX shell:
 
 `docker/master.key` (and any `docker/*.key`) is gitignored. Never commit it.
 
-## 2. Start and stop
+## 2. Generate the database passwords
+
+The server stores every record in its own Postgres (the `pragmatic-postgres` service). Its passwords and the server's
+database URL are files in `docker/postgres-secrets/` (gitignored, never commit them); the uid 999 the database runs as
+must read them:
+
+    mkdir -p docker/postgres-secrets/pragmatic-postgres/applications
+    node -e "const c=require('crypto'),f=require('fs'),d='docker/postgres-secrets/';const p=c.randomBytes(24).toString('base64url');f.writeFileSync(d+'pragmatic-postgres/superuser',c.randomBytes(24).toString('base64url'));f.writeFileSync(d+'pragmatic-postgres/applications/pragmatic-env-server',p);f.writeFileSync(d+'database-url','postgres://env_server:'+p+'@pragmatic-postgres:5432/env_server')"
+
+## 3. Start and stop
 
     docker compose up
     docker compose down
 
 State lives in the named volume `pragmatic-data` (mounted at `/data`). Use `docker compose down -v` to wipe it.
 
-## 3. Environments
+## 4. Environments
 
 `docker/environments.example.json` is mounted read-only at `/cfg/environments.json`. It declares one environment, `acme`. Copy and edit it for your own environments, then point the bind mount at your copy.
-## 4. Connect a client
+## 5. Connect a client
 
     ws://localhost:8080/?environment=acme
 

@@ -3,8 +3,9 @@ import { Argon2PasswordHasher } from '@pragmatic-tech-ai/pragmatic-identity-sour
 import { ConfigurableIdentityProviderRegistry } from '@pragmatic-tech-ai/pragmatic-identity-realm'
 import { ServerIdentityPack } from '@pragmatic-tech-ai/pragmatic-identity-store'
 import type { ServiceProvider } from '@pragmatic-tech-ai/todl-runtime'
-import { FetchHttpClient, InMemoryOidcFlowStateStore, OidcSettingKeys } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
-import type { OidcIdentityProviderPackBase } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
+import { FetchHttpClient, OidcSettingKeys } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
+import type { OidcIdentityProviderPackBase, IOidcFlowStateStore } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
+import { EnvironmentFlowStateStore } from './environment-flow-state-store.js'
 import { IdentityPackResolver } from './identity-pack-resolver.js'
 import { ServerBootstrap } from './server-bootstrap.js'
 import { EnvironmentSecretProvisioner } from './environment-secret-provisioner.js'
@@ -37,8 +38,8 @@ export class IdentityModule
         const realm = this.Realm()
         const masterKey = this.platform.ResolveMasterKey(this.options.masterKey)
         const hasher = new Argon2PasswordHasher()
-        const stores = await this.platform.CreateIdentityStores(this.options.identityRoot, masterKey)
-        const environmentConfig = await this.platform.CreateRealmConfigStore(this.options.identityRoot)
+        const stores = await this.platform.CreateIdentityStores(realm.Id, masterKey)
+        const environmentConfig = await this.platform.CreateRealmConfigStore(realm.Id)
         const seed = this.options.identityConfig ?? IdentityModule.LegacyOrLocal(this.options.oidc)
         const stored = await environmentConfig.Get(realm.Id)
         const config = stored ?? seed
@@ -65,7 +66,7 @@ export class IdentityModule
             const unique = [...new Set(refs)]
             await new EnvironmentSecretProvisioner(this.options.provisionedSecrets).EnsureAsync(stores.Secrets, unique)
         }
-        const resolver = new IdentityPackResolver(this.options.httpClient ?? new FetchHttpClient(), this.options.flowStateStore ?? new InMemoryOidcFlowStateStore())
+        const resolver = new IdentityPackResolver(this.options.httpClient ?? new FetchHttpClient(), this.options.flowStateStore ?? await this.DatabaseFlowStates(realm))
         const resolved = resolver.Resolve(realm, config, stores, this.options.machine)
         const pack = resolved.Pack
         services.registerInstance(RealmConfigStoreKey, environmentConfig)
@@ -78,6 +79,12 @@ export class IdentityModule
             await ServerBootstrap.SeedAsync(pack, realm, this.options.bootstrap)
         }
         return { pack, realm, oidc: resolved.Oidc }
+    }
+
+    /** Without a host-supplied store (a server composed on its own), the environment's view of the database's flow states. */
+    private async DatabaseFlowStates(realm: Realm): Promise<IOidcFlowStateStore>
+    {
+        return new EnvironmentFlowStateStore(await this.platform.Database.FlowStates(), realm.Id)
     }
 
     /** An environment given only the legacy flat oidc options gets the equivalent generic-oidc config; none means local-only. */

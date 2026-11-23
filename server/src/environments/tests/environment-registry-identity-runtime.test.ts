@@ -7,6 +7,7 @@ import { InMemoryEnvironmentCoordinator } from '../environment-coordinator.js'
 import type { IdentityRuntime } from '../../identity/identity-runtime.js'
 import type { MachinePrincipalMap } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import type { EnvironmentProvisioning } from '../environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class FakeRuntime implements IdentityRuntime
 {
@@ -35,7 +36,7 @@ class Fixtures
     public static Registry(runtime?: IdentityRuntime): EnvironmentRegistry
     {
         const provisioning = new InMemoryEnvironmentProvisioning(new Map())
-        return new EnvironmentRegistry('/base', { base64Env: 'X' }, provisioning, new InMemoryEnvironmentCoordinator(), undefined, undefined, undefined, undefined, runtime)
+        return new EnvironmentRegistry('/base', { base64Env: 'X' }, provisioning, new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem(), undefined, undefined, undefined, runtime)
     }
 }
 

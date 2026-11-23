@@ -10,6 +10,7 @@ import { PragmaticServer, type PragmaticServerOptions } from '../../pragmatic-se
 import { ConnectorsPolicy } from '../connector-policy.js'
 import { SandboxStrategy, type AdapterPacksConfig, ServerConfigLoader } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { DevConnectorRead } from '../engine/tests/dev-connector-read.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class CountingNpm implements INpmCli
 {
@@ -165,7 +166,7 @@ test('AdapterPackProvider builds a real NpmAdapterPackProvider from adapterPacks
     {
         for (const strategy of [SandboxStrategy.Worker, SandboxStrategy.Child])
         {
-            const provider = Fixture.AdapterPackProvider({ adapterPacks: { ...Fixture.Packs(cacheDir, strategy), requireSignatures: true, resourceLimits: { maxOldGenerationSizeMb: 64 }, eviction: { maxVersionsPerPack: 2, maxAgeMs: 1000 } }, connectorsPolicy: Denied })
+            const provider = Fixture.AdapterPackProvider({ platform: CustomPlatformFixture.Mem(), adapterPacks: { ...Fixture.Packs(cacheDir, strategy), requireSignatures: true, resourceLimits: { maxOldGenerationSizeMb: 64 }, eviction: { maxVersionsPerPack: 2, maxAgeMs: 1000 } }, connectorsPolicy: Denied })
             assert.ok(provider instanceof NpmAdapterPackProvider)
             assert.equal(typeof provider.Resolve, 'function')
             const options = (provider as unknown as { options: NpmAdapterPackProviderOptions }).options
@@ -191,7 +192,7 @@ test('AdapterPackProvider positive path: override on and pack allowlisted passes
     try
     {
         const policy = new ConnectorsPolicy([DataSourceKind.Sql], false, true, [Fixture.AllowedPack])
-        const provider = Fixture.AdapterPackProvider({ adapterPacks: Fixture.Packs(cacheDir), connectorsPolicy: policy }) as NpmAdapterPackProvider
+        const provider = Fixture.AdapterPackProvider({ platform: CustomPlatformFixture.Mem(), adapterPacks: Fixture.Packs(cacheDir), connectorsPolicy: policy }) as NpmAdapterPackProvider
         const reached = new Error(Fixture.InstallReached)
         const internals = provider as unknown as { installer: { Install(): Promise<never> } }
         internals.installer = { Install: async () => { throw reached } }
@@ -225,8 +226,8 @@ test('loader: the script allowlist env without DIR is rejected', () =>
 
 test('AdapterPackProvider returns undefined when adapterPacks is absent', () =>
 {
-    assert.equal(Fixture.AdapterPackProvider({ connectorsPolicy: Denied }), undefined)
-    assert.equal(Fixture.AdapterPackProvider({}), undefined)
+    assert.equal(Fixture.AdapterPackProvider({ platform: CustomPlatformFixture.Mem(), connectorsPolicy: Denied }), undefined)
+    assert.equal(Fixture.AdapterPackProvider({ platform: CustomPlatformFixture.Mem() }), undefined)
 })
 
 test('loader: a bad sandbox strategy throws the typed config error', () =>
@@ -263,7 +264,7 @@ test('gate through composition (config-built provider): override denied rejects 
     const cacheDir = Fixture.TempDir()
     try
     {
-        await Fixture.WithServer(Fixture.Provider, { connectorsPolicy: Denied, adapterPacks: Fixture.Packs(cacheDir) }, async read =>
+        await Fixture.WithServer(Fixture.Provider, { platform: CustomPlatformFixture.Mem(), connectorsPolicy: Denied, adapterPacks: Fixture.Packs(cacheDir) }, async read =>
         {
             await assert.rejects(() => read(), /connector provider override is disabled by policy/)
         })
@@ -282,7 +283,7 @@ test('gate through composition (injected provider): override denied runs no inst
     const provider = new NpmAdapterPackProvider({ cacheDir, npm, sandboxFactory: sandbox as never, allowProviderOverride: false, providerAllowlist: ['acme-pack'] })
     try
     {
-        await Fixture.WithServer(Fixture.Provider, { connectorsPolicy: Denied, connectors: { provider } }, async read =>
+        await Fixture.WithServer(Fixture.Provider, { platform: CustomPlatformFixture.Mem(), connectorsPolicy: Denied, connectors: { provider } }, async read =>
         {
             await assert.rejects(() => read(), /connector provider override is disabled by policy/)
         })
@@ -301,7 +302,7 @@ test('allowlist gate: an override-enabled environment still rejects a provider n
     try
     {
         const policy = new ConnectorsPolicy([DataSourceKind.Sql], false, true, ['other-pack'])
-        await Fixture.WithServer(Fixture.Provider, { connectorsPolicy: policy, adapterPacks: Fixture.Packs(cacheDir) }, async read =>
+        await Fixture.WithServer(Fixture.Provider, { platform: CustomPlatformFixture.Mem(), connectorsPolicy: policy, adapterPacks: Fixture.Packs(cacheDir) }, async read =>
         {
             await assert.rejects(() => read(), /connector provider is not allowlisted/)
         })
@@ -315,7 +316,7 @@ test('allowlist gate: an override-enabled environment still rejects a provider n
 test('disposing the server disposes its provider through ConnectorsHost.Dispose', async () =>
 {
     const provider = new RecordingProvider()
-    const server = new PragmaticServer({ packagesRoot: join(Fixture.TempDir(), 'packages'), connectorsPolicy: Denied, connectors: { provider } })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: join(Fixture.TempDir(), 'packages'), connectorsPolicy: Denied, connectors: { provider } })
     await server.Start()
     assert.equal(provider.Disposed, false)
     await server.Dispose()
@@ -324,7 +325,7 @@ test('disposing the server disposes its provider through ConnectorsHost.Dispose'
 
 test('feature off: a named-provider connector still gets the catalog no-provider rejection', async () =>
 {
-    await Fixture.WithServer(Fixture.Provider, { connectorsPolicy: Denied }, async read =>
+    await Fixture.WithServer(Fixture.Provider, { platform: CustomPlatformFixture.Mem(), connectorsPolicy: Denied }, async read =>
     {
         await assert.rejects(() => read(), /no adapter provider is configured/)
     })
@@ -332,7 +333,7 @@ test('feature off: a named-provider connector still gets the catalog no-provider
 
 test('feature off: a non-provider connector is unchanged', async () =>
 {
-    await Fixture.WithServer(Fixture.Plain, { connectorsPolicy: ConnectorsPolicy.Default() }, async read =>
+    await Fixture.WithServer(Fixture.Plain, { platform: CustomPlatformFixture.Mem(), connectorsPolicy: ConnectorsPolicy.Default() }, async read =>
     {
         const entities = await read()
         assert.ok(entities.length >= 1)
@@ -344,7 +345,7 @@ test('feature on: a non-provider connector still reads normally', async () =>
     const cacheDir = Fixture.TempDir()
     try
     {
-        await Fixture.WithServer(Fixture.Plain, { connectorsPolicy: ConnectorsPolicy.Default(), adapterPacks: Fixture.Packs(cacheDir) }, async read =>
+        await Fixture.WithServer(Fixture.Plain, { platform: CustomPlatformFixture.Mem(), connectorsPolicy: ConnectorsPolicy.Default(), adapterPacks: Fixture.Packs(cacheDir) }, async read =>
         {
             const entities = await read()
             assert.ok(entities.length >= 1)

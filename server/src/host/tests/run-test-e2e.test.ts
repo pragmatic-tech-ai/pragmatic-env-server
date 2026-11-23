@@ -13,6 +13,7 @@ import { InMemoryEnvironmentProvisioning } from '../../environments/environment-
 import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 /**
  * A dual-purpose environment (Development + runtimeCoHosted, with identity) on a real host: a Developer+RunTest token loads a
@@ -105,6 +106,7 @@ class RunTestE2eFixture
             bootstrap: { adminEmail: RunTestE2eFixture.AdminEmail, adminPrincipalId: RunTestE2eFixture.AdminPrincipal, adminPasswordRef: RunTestE2eFixture.AdminPasswordRef, ownerGrant: true },
         }]])
         this.Host = await PragmaticServerHost.StartAsync({
+            platform: CustomPlatformFixture.Mem(),
             host: RunTestE2eFixture.Loopback,
             port: 0,
             baseDir: this.Dir,

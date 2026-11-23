@@ -3,12 +3,15 @@ import type { IStorage } from '@pragmatic-tech-ai/todl-runtime'
 import { PragmaticAppManifestParser } from './pragmatic-app-manifest.js'
 import type { PragmaticAppManifest } from './pragmatic-app-manifest.js'
 import type { IAppSessionCheck } from './app-session-check.js'
+import type { PragmaticAppsRegistry } from './pragmatic-apps-registry.js'
 import { SignInPage } from '../sign-in-page.js'
 
-/** The slice of a per-environment server the endpoint needs: its applications storage. */
+/** The slice of a per-environment server the endpoint needs: its applications (the live manifest, from the env server
+ *  database) and its applications storage (the UI files). */
 export interface IAppStorageSource
 {
     AppsStorage(): IStorage
+    Applications(): PragmaticAppsRegistry
 }
 
 /** Resolves an environment id to its server; the host registry satisfies this. Rejects for an unknown environment. */
@@ -40,9 +43,6 @@ export class AppServingEndpoint
     private static readonly Separator = PragmaticAppManifestParser.Separator
     private static readonly Empty = ''
     private static readonly UiDir = 'ui'
-    private static readonly ManifestFile = 'application.json'
-    private static readonly LivePointerFile = 'live'
-    private static readonly UnsafePointerError = 'live pointer is not a safe version segment'
     private static readonly AmpersandPattern = /&/g
     private static readonly QuotePattern = /"/g
     private static readonly LessThanPattern = /</g
@@ -129,15 +129,16 @@ export class AppServingEndpoint
         let base: string
         try
         {
-            storage = (await this.servers.ServerFor(route.environment)).AppsStorage()
-            base = await AppServingEndpoint.ResolveBase(storage, route.app)
-            const manifestPath = base + AppServingEndpoint.ManifestFile
-            if (!await storage.Exists(manifestPath))
+            const server = await this.servers.ServerFor(route.environment)
+            const live = await server.Applications().LiveApplicationFor(route.app)
+            if (live === undefined)
             {
                 this.Fail(res, AppServingEndpoint.NotFoundStatus)
                 return
             }
-            manifest = PragmaticAppManifestParser.Parse(await storage.ReadText(manifestPath))
+            manifest = live.Manifest
+            storage = server.AppsStorage()
+            base = route.app + AppServingEndpoint.Separator + manifest.version + AppServingEndpoint.Separator
         }
         catch
         {
@@ -201,26 +202,6 @@ export class AppServingEndpoint
             [AppServingEndpoint.NoSniffHeader]: AppServingEndpoint.NoSniffValue,
         })
         res.end(method === AppServingEndpoint.HeadMethod ? undefined : body)
-    }
-
-    /**
-     * The storage prefix (with trailing separator) the app is served from: `<app>/<version>/` when `<app>/live` names a
-     * version, else the legacy `<app>/` layout. The pointer content is untrusted storage data, so it must be a safe segment.
-     */
-    private static async ResolveBase(storage: IStorage, app: string): Promise<string>
-    {
-        const pointer = app + AppServingEndpoint.Separator + AppServingEndpoint.LivePointerFile
-        if (!await storage.Exists(pointer))
-        {
-            return app + AppServingEndpoint.Separator
-        }
-        // A torn/interrupted pointer write (a bare WriteText overwrite, not stage-then-rename) yields a 404 for this app (fail-closed), not a rollback; "previous version" covers only the pointer-ABSENT case.
-        const version = (await storage.ReadText(pointer)).trim()
-        if (!PragmaticAppManifestParser.IsSafeSegment(version))
-        {
-            throw new Error(AppServingEndpoint.UnsafePointerError)
-        }
-        return app + AppServingEndpoint.Separator + version + AppServingEndpoint.Separator
     }
 
     /** Adds only the (validated, non-secret) app name to the shell; never an environment. */

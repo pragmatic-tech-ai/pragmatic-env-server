@@ -13,6 +13,7 @@ import { ServerConnectionHandler } from '../../host/server-connection-handler.js
 import { Observability, ObservabilityRole } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { RequestInstrumentation } from '../request-instrumentation.js'
 import { NullLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class ThrowingLogger implements ILogger
 {
@@ -104,7 +105,7 @@ test('one successful request emits exactly one span and the success metrics with
     const fixture = new Fixture()
     const packages = mkdtempSync(join(tmpdir(), 'ps-pkgs-'))
     const solution = Fixture.SolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()
@@ -201,7 +202,7 @@ test('a denied request through the real handler rejects and records one error sp
     const fixture = new Fixture()
     const packages = mkdtempSync(join(tmpdir(), 'ps-pkgs-'))
     const solution = Fixture.SolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()
@@ -241,7 +242,7 @@ test('with no instrumentation attached a request still succeeds and nothing is r
     const fixture = new Fixture()
     const packages = mkdtempSync(join(tmpdir(), 'ps-pkgs-'))
     const solution = Fixture.SolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()

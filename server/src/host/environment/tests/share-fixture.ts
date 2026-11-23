@@ -99,8 +99,8 @@ export class ShareFx
         {
             await fx.Package(ShareFx.Crm.id, ShareFx.Crm.version, ShareFx.CrmTodl)
             await fx.Package(ShareFx.Ext.id, ShareFx.Ext.version, ShareFx.ExtTodl)
-            fx.Live(ShareFx.App, ShareFx.AppVersion, [ShareFx.Crm])
-            fx.Live(ShareFx.ExtApp, ShareFx.AppVersion, [ShareFx.Ext])
+            await fx.Live(ShareFx.App, ShareFx.AppVersion, [ShareFx.Crm])
+            await fx.Live(ShareFx.ExtApp, ShareFx.AppVersion, [ShareFx.Ext])
             fx.Source.Adapter.Seed(ShareFx.CustomerSource, [{ [ShareFx.CustomerKey]: ShareFx.K1, [ShareFx.NameField]: ShareFx.Acme }])
             await fx.Start({ Identity: true, SecurityModel: ShareFx.Model() })
             await ShareFx.SeedAccounts(fx, [ShareFx.R1, ShareFx.R2])

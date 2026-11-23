@@ -9,6 +9,7 @@ import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import { RateLimitGuard, TokenBucketRateLimiter, AuditSurface, AuditOutcome, type IAccessAuditSink, type AccessAuditEvent } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class CapturingSink implements IAccessAuditSink
 {
@@ -55,7 +56,7 @@ test('a per-environment upgrade breach returns 429 with Retry-After and audits a
     const sink = new CapturingSink()
     const guard = new RateLimitGuard(new TokenBucketRateLimiter({ perEnvironment: { Rps: 0.001, Burst: 1 } }), sink)
     const entries = new Map<string, EnvironmentProvisioning>([['t1', { displayName: 'Environment One' }]])
-    const host = await PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: keyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries), rateLimit: guard })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: keyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries), rateLimit: guard })
     const base = `ws://${host.Address().host}:${host.Address().port}/?environment=t1`
     try
     {

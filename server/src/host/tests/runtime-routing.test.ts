@@ -9,6 +9,7 @@ import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role,
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class RuntimeRoutingFixture
 {
@@ -28,7 +29,7 @@ class RuntimeRoutingFixture
     public static async With(body: (client: PragmaticClient) => Promise<void>): Promise<void>
     {
         const packages = mkdtempSync(join(tmpdir(), RuntimeRoutingFixture.PackagesPrefix))
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         const languageService = await server.LanguageService()
         const manager = await server.Manager()

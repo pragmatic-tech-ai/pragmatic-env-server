@@ -14,6 +14,7 @@ import { MachineTls, type MachineTlsRef, DrainController, type IInFlightSource, 
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import { StructuredLogger } from '@pragmatic-tech-ai/pragmatic-observability'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixture
 {
@@ -53,7 +54,7 @@ class Fixture
     public static Start(baseDir: string, drainTimeoutMs: number, lines?: string[], observability?: Observability): Promise<WorkerHost>
     {
         const logger = lines === undefined ? undefined : StructuredLogger.ToSink(line => lines.push(line))
-        return WorkerHost.StartAsync({ port: 0, baseDir, masterKey: { base64Env: Fixture.KeyEnv }, provisioning: Fixture.Provisioning(), tls: Fixture.Tls(), healthPort: 0, drainTimeoutMs, logger, observability })
+        return WorkerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), port: 0, baseDir, masterKey: { base64Env: Fixture.KeyEnv }, provisioning: Fixture.Provisioning(), tls: Fixture.Tls(), healthPort: 0, drainTimeoutMs, logger, observability })
     }
 
     public static Events(lines: string[]): Record<string, unknown>[]

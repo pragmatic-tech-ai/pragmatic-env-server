@@ -8,6 +8,7 @@ import { IdentityConfig, DelegationDepth, Role } from '@pragmatic-tech-ai/pragma
 import { OidcSettingKeys } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class ReadBackFixture
 {
@@ -35,9 +36,9 @@ class ReadBackFixture
     public static Options(identityRoot: string, packagesRoot: string)
     {
         return {
+            platform: CustomPlatformFixture.Mem(),
             packagesRoot,
             identity: {
-                identityRoot,
                 masterKey: { base64Env: ReadBackFixture.KeyEnv },
                 environment: { id: ReadBackFixture.EnvironmentId, displayName: 'Environment One' },
             },

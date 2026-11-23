@@ -5,6 +5,7 @@ import { ServerBootstrap } from '../server-bootstrap.js'
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixture
 {
@@ -23,19 +24,15 @@ class Fixture
 
 test('composes host options from a local config', () =>
 {
-    const options = ServerBootstrap.ComposeOptions(Fixture.Config(DeploymentMode.Local), Fixture.Provisioning())
+    const platform = CustomPlatformFixture.Mem()
+    const options = ServerBootstrap.ComposeOptions(Fixture.Config(DeploymentMode.Local), Fixture.Provisioning(), platform)
     assert.equal(options.port, 8080)
     assert.equal(options.host, '0.0.0.0')
     assert.equal(options.baseDir, '/data')
     assert.deepEqual(options.masterKey, { keyFilePath: '/run/secrets/key' })
     assert.equal(options.deploymentMode, DeploymentMode.Local)
-    assert.equal(options.platform, undefined)
+    assert.equal(options.platform, platform)
     assert.equal(options.idleTtlMs, 1000)
-})
-
-test('cloud mode without an injected platform fails closed', () =>
-{
-    assert.throws(() => ServerBootstrap.ComposeOptions(Fixture.Config(DeploymentMode.Cloud), Fixture.Provisioning()), /cloud/i)
 })
 
 test('the startup line never contains the master key reference target', () =>
@@ -49,7 +46,7 @@ test('the startup line never contains the master key reference target', () =>
 test('ComposeOptions carries the provisioned secret source onto the host options', () =>
 {
     const source = ProvisionedSecretSource.FromText('{}')
-    const options = ServerBootstrap.ComposeOptions(Fixture.Config(DeploymentMode.Local), Fixture.Provisioning(), undefined, source)
+    const options = ServerBootstrap.ComposeOptions(Fixture.Config(DeploymentMode.Local), Fixture.Provisioning(), CustomPlatformFixture.Mem(), source)
     assert.equal(options.provisionedSecrets, source)
 })
 
@@ -75,7 +72,7 @@ test('StartupLine reports secrets=none for an empty-string provisioned-secrets f
 test('ComposeOptions threads drainTimeoutMs through to the host options', () =>
 {
     const config = { ...Fixture.Config(DeploymentMode.Local), drainTimeoutMs: 30000 }
-    const options = ServerBootstrap.ComposeOptions(config, Fixture.Provisioning())
+    const options = ServerBootstrap.ComposeOptions(config, Fixture.Provisioning(), CustomPlatformFixture.Mem())
     assert.equal(options.drainTimeoutMs, 30000)
 })
 
@@ -95,7 +92,7 @@ class DrainFixture
 
 test('ComposeWorkerOptions threads drainTimeoutMs', () =>
 {
-    const options = ServerBootstrap.ComposeWorkerOptions(DrainFixture.Worker(), Fixture.Provisioning())
+    const options = ServerBootstrap.ComposeWorkerOptions(DrainFixture.Worker(), Fixture.Provisioning(), CustomPlatformFixture.Mem())
     assert.equal(options.drainTimeoutMs, 31000)
 })
 

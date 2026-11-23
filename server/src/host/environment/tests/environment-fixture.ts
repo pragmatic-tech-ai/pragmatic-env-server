@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AccessScope, StorageKind } from '@pragmatic-tech-ai/pragmatic-graph'
@@ -15,13 +15,16 @@ import type { IStorage } from '@pragmatic-tech-ai/todl-runtime'
 import { NodeFsStorage } from '@pragmatic-tech-ai/todl-runtime/node'
 import { PragmaticServer } from '../../../pragmatic-server.js'
 import { EnvironmentPurpose } from '../../../environments/environment-purpose.js'
-import { PragmaticAppsRegistry } from '../../apps/pragmatic-apps-registry.js'
+import { PragmaticAppsRegistry, type ApplicationRecord } from '../../apps/pragmatic-apps-registry.js'
 import { MemorySourceAdapter, MemorySourceAdapterFactory } from '../../engine/tests/memory-source-adapter.js'
 import { ServerConnectionHandler } from '../../server-connection-handler.js'
 import { EnvironmentDeliveries } from '../environment-deliveries.js'
 import { EnvironmentEngineHost } from '../environment-engine-host.js'
 import type { IEnvironmentDiagnostics, IEnvironmentHostTiming } from '../environment-engine-host.js'
-import { PromoteRecordStore } from '../promote-record-store.js'
+import { PromoteRecordStore, type PromoteRecord } from '../promote-record-store.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
+import { EnvServerRegistry } from '../../../storage/env-server-registry.js'
+import { EnvironmentRecords } from '../../../storage/environment-records.js'
 
 /** A package an app manifest or the promote record names. */
 export type FixturePackageRef = { readonly id: string; readonly version: string }
@@ -47,7 +50,7 @@ export interface IEnvironmentFixtureOptions
 /**
  * A runtime environment on disk for environment-engine tests (server-own, Task 5): `<root>/<EnvironmentId>/{packages,
  * applications,graphs,identity}` as EnvironmentRegistry lays it out. `Package` compiles TODL with `compilePackage` into
- * `packages/`; `Live` writes an app manifest and its `live` pointer; `Promote` writes the promote record; `Start` builds
+ * `packages/`; `Live` commits an app manifest (live) to the registry; `Promote` writes the promote record; `Start` builds
  * a Runtime `PragmaticServer` (identity optional) whose adapter catalog serves the SQL kind from `Source` (a
  * MemorySourceAdapter), so any `kind = sql` datasource is an external binding over it; `Host` builds a standalone
  * EnvironmentEngineHost over the same directories (for tests that need its seams); `Seed` writes engine-stored nodes
@@ -63,9 +66,6 @@ export class EnvironmentFixture
     private static readonly PackagesDir = 'packages'
     private static readonly ApplicationsDir = 'applications'
     private static readonly GraphsDir = 'graphs'
-    private static readonly IdentityDir = 'identity'
-    private static readonly ManifestFile = 'application.json'
-    private static readonly LivePointerFile = 'live'
     private static readonly SourceSuffix = '.todl'
     private static readonly NotStartedMessage = 'the environment fixture has not been started'
     private static readonly NotSeededMessage = 'realm config was not seeded on boot'
@@ -75,7 +75,8 @@ export class EnvironmentFixture
     public readonly PackagesDir = join(this.EnvironmentDir, EnvironmentFixture.PackagesDir)
     public readonly AppsDir = join(this.EnvironmentDir, EnvironmentFixture.ApplicationsDir)
     public readonly GraphsDir = join(this.EnvironmentDir, EnvironmentFixture.GraphsDir)
-    public readonly IdentityDir = join(this.EnvironmentDir, EnvironmentFixture.IdentityDir)
+    /** The platform every server the fixture boots shares (its database holds the identity records across a restart). */
+    public readonly Platform = CustomPlatformFixture.Mem()
     /** The engine store path the server's environment host uses. */
     public readonly StorePath = join(this.GraphsDir, EnvironmentEngineHost.StoreDir)
     /** Serves every SQL datasource of the environment (over `adapter`, default a fresh MemorySourceAdapter). */
@@ -88,7 +89,7 @@ export class EnvironmentFixture
     public constructor(adapter: MemorySourceAdapter = new MemorySourceAdapter())
     {
         this.Source = new MemorySourceAdapterFactory(adapter)
-        for (const dir of [this.PackagesDir, this.AppsDir, this.GraphsDir, this.IdentityDir]) mkdirSync(dir, { recursive: true })
+        for (const dir of [this.PackagesDir, this.AppsDir, this.GraphsDir]) mkdirSync(dir, { recursive: true })
     }
 
     public get Server(): PragmaticServer
@@ -107,13 +108,22 @@ export class EnvironmentFixture
         return outcome.package!
     }
 
-    /** Writes `applications/<app>/<version>/application.json` and makes that version live (`<app>/live`). */
-    public Live(app: string, version: string, packages: readonly FixturePackageRef[]): void
+    /** Commits `app@version`'s manifest to the environment's applications registry, making that version live. */
+    public async Live(app: string, version: string, packages: readonly FixturePackageRef[]): Promise<void>
     {
-        mkdirSync(join(this.AppsDir, app, version), { recursive: true })
-        const manifest = { name: app, version, packages: packages.map(ref => ({ id: ref.id, version: ref.version })) }
-        writeFileSync(join(this.AppsDir, app, version, EnvironmentFixture.ManifestFile), JSON.stringify(manifest))
-        writeFileSync(join(this.AppsDir, app, EnvironmentFixture.LivePointerFile), version)
+        await this.Applications().Commit({ name: app, version, packages: packages.map(ref => ({ id: ref.id, version: ref.version })) })
+    }
+
+    /** The environment's applications registry (in the fixture platform's database; what the server reads). */
+    public Applications(): PragmaticAppsRegistry
+    {
+        return new PragmaticAppsRegistry(this.Records<ApplicationRecord>(EnvServerRegistry.Applications))
+    }
+
+    /** The environment's records of `registry` in the fixture platform's database. */
+    public Records<T extends { id: string }>(registry: EnvServerRegistry): EnvironmentRecords<T>
+    {
+        return new EnvironmentRecords<T>(this.Platform.Database, registry, EnvironmentFixture.EnvironmentId)
     }
 
     /** Sets a fresh master key in `KeyEnv` (as `Start` does with identity) and returns its reference, for an EnvironmentRegistry over `Root`. */
@@ -123,7 +133,7 @@ export class EnvironmentFixture
         return { base64Env: EnvironmentFixture.KeyEnv }
     }
 
-    /** Writes the promote record (`graphs/loaded-graph.json`). */
+    /** Writes the promote record (the environment's loaded-graph record). */
     public Promote(name: string, packages: readonly FixturePackageRef[]): Promise<void>
     {
         return this.PromoteRecords().Save({ name, packages: packages.map(ref => ({ id: ref.id, version: ref.version })), promotedAt: new Date().toISOString() })
@@ -131,7 +141,7 @@ export class EnvironmentFixture
 
     public Deliveries(): EnvironmentDeliveries
     {
-        return new EnvironmentDeliveries(new PragmaticAppsRegistry(new NodeFsStorage(this.AppsDir)), this.PromoteRecords())
+        return new EnvironmentDeliveries(this.Applications(), this.PromoteRecords())
     }
 
     /** Builds and starts the Runtime server of the environment. */
@@ -157,13 +167,15 @@ export class EnvironmentFixture
     private async Boot(options: IEnvironmentFixtureOptions): Promise<void>
     {
         this.server = new PragmaticServer({
+            platform: this.Platform,
             purpose: EnvironmentPurpose.Runtime,
+            environmentId: EnvironmentFixture.EnvironmentId,
             packagesRoot: this.PackagesDir,
             applicationsRoot: this.AppsDir,
             graphsRoot: this.GraphsDir,
             adapterFactories: [this.Source],
             ...(options.Identity === true
-                ? { identity: { identityRoot: this.IdentityDir, masterKey: { base64Env: EnvironmentFixture.KeyEnv }, environment: { id: EnvironmentFixture.EnvironmentId, displayName: EnvironmentFixture.DisplayName }, directorySyncOnStart: options.DirectorySyncOnStart ?? false } }
+                ? { identity: { masterKey: { base64Env: EnvironmentFixture.KeyEnv }, environment: { id: EnvironmentFixture.EnvironmentId, displayName: EnvironmentFixture.DisplayName }, directorySyncOnStart: options.DirectorySyncOnStart ?? false } }
                 : {}),
         })
         await this.server.Start()
@@ -263,7 +275,7 @@ export class EnvironmentFixture
 
     private PromoteRecords(): PromoteRecordStore
     {
-        return new PromoteRecordStore(new NodeFsStorage(this.GraphsDir))
+        return new PromoteRecordStore(this.Records<PromoteRecord>(EnvServerRegistry.LoadedGraph))
     }
 
     /** Saves `model` as the environment security setting and invalidates the server's cached one. */

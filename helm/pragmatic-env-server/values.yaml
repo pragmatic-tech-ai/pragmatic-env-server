@@ -38,6 +38,13 @@ resources:
 deploymentMode: local
 baseDir: /data
 
+# The env server's own Postgres database (A5, required): every record of every environment lives there. urlSecret names
+# an existing Secret (in the release namespace) whose urlKey holds the postgres:// URL; it is mounted as a file and
+# never inlined. Empty fails the render.
+database:
+  urlSecret: pragmatic-env-server-database
+  urlKey: database-url
+
 persistence:
   enabled: true
   size: 1Gi

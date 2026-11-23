@@ -1,0 +1,10 @@
+{
+  "name": "suite",
+  "packages": [
+    {
+      "id": "hr",
+      "version": "2.0.0"
+    }
+  ],
+  "promotedAt": "2026-11-02T00:00:00.000Z"
+}

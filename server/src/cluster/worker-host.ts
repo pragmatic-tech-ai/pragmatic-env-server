@@ -24,6 +24,7 @@ import type { IEnvironmentProvisioning } from '../environments/environment-provi
 import { TLSSocket } from 'node:tls'
 import type { ServerIdentityPack } from '@pragmatic-tech-ai/pragmatic-identity-store'
 import type { PlatformServices } from '../platform/platform-services.js'
+import { IdentityRuntimeFactory } from '../identity/identity-runtime-factory.js'
 import { NullLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { RequestInstrumentation } from '../observability/request-instrumentation.js'
 import { EnvironmentPurpose } from '../environments/environment-purpose.js'
@@ -40,7 +41,7 @@ export interface WorkerHostOptions
     tls: MachineTlsRef
     idleTtlMs?: number
     idleSweepMs?: number
-    platform?: PlatformServices
+    platform: PlatformServices
     deploymentMode?: DeploymentMode
     redisUrl?: string
     replicaId?: string
@@ -263,7 +264,7 @@ export class WorkerHost
             ? new RedisEnvironmentOwnership(options.redisUrl!, options.replicaId ?? randomUUID())
             : new InMemoryEnvironmentOwnership()
         await ownership.Start().catch(() => {})
-        const registry = new EnvironmentRegistry(options.baseDir, options.masterKey, options.provisioning, coordinator, options.platform, options.deploymentMode, ownership, options.provisionedSecrets, undefined, options.adapterPacks, options.logger)
+        const registry = new EnvironmentRegistry(options.baseDir, options.masterKey, options.provisioning, coordinator, options.platform, options.deploymentMode, ownership, options.provisionedSecrets, await IdentityRuntimeFactory.Build(options.platform), options.adapterPacks, options.logger)
         const host = options.host ?? WorkerHost.DefaultHost
         const httpsServer = createServer(MachineTls.Server(options.tls))
         const resilience = options.wsResilience ?? WorkerHost.DefaultWsResilience

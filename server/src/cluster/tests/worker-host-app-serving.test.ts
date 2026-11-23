@@ -16,6 +16,12 @@ import { MachineTls, type MachineTlsRef } from '@pragmatic-tech-ai/pragmatic-env
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
+import type { CustomPlatform } from '../../platform/custom-platform.js'
+import { PragmaticAppsRegistry, type ApplicationRecord } from '../../host/apps/pragmatic-apps-registry.js'
+import type { PragmaticAppManifest } from '../../host/apps/pragmatic-app-manifest.js'
+import { EnvServerRegistry } from '../../storage/env-server-registry.js'
+import { EnvironmentRecords } from '../../storage/environment-records.js'
 
 interface Reply
 {
@@ -37,6 +43,12 @@ class WorkerServeFixture
     public static Client(): MachineTlsRef
     {
         return { certFile: join(WorkerServeFixture.Dir, 'client.pem'), keyFile: join(WorkerServeFixture.Dir, 'client.key'), caFile: join(WorkerServeFixture.Dir, 'ca.pem') }
+    }
+
+    /** Commits `manifest` (live) to `environment`'s applications registry in `platform`'s database. */
+    public static CommitLive(platform: CustomPlatform, environment: string, manifest: PragmaticAppManifest): Promise<void>
+    {
+        return new PragmaticAppsRegistry(new EnvironmentRecords<ApplicationRecord>(platform.Database, EnvServerRegistry.Applications, environment)).Commit(manifest)
     }
 
     public static Get(port: number, path: string): Promise<Reply>
@@ -61,13 +73,14 @@ test('a worker dispatches /app/<environment>/<app>/ to AppServingEndpoint exactl
     const baseDir = mkdtempSync(join(tmpdir(), 'ps-whas-'))
     process.env[WorkerServeFixture.KeyEnv] = randomBytes(32).toString('base64')
     const apps = join(baseDir, 't1', 'applications')
-    mkdirSync(join(apps, 'shop', 'ui', 'assets'), { recursive: true })
-    writeFileSync(join(apps, 'shop', 'ui', 'index.html'), '<html><head></head><body>shell</body></html>')
-    writeFileSync(join(apps, 'shop', 'ui', 'assets', 'app.js'), 'console.log(1)')
+    mkdirSync(join(apps, 'shop', '1.0.0', 'ui', 'assets'), { recursive: true })
+    writeFileSync(join(apps, 'shop', '1.0.0', 'ui', 'index.html'), '<html><head></head><body>shell</body></html>')
+    writeFileSync(join(apps, 'shop', '1.0.0', 'ui', 'assets', 'app.js'), 'console.log(1)')
     writeFileSync(join(apps, 'secret.txt'), 'TOP-SECRET')
-    writeFileSync(join(apps, 'shop', 'application.json'), JSON.stringify({ name: 'shop', version: '1.0.0', packages: [], ui: { entry: 'index.html', assets: ['assets/app.js'] } }))
+    const platform = CustomPlatformFixture.Mem()
+    await WorkerServeFixture.CommitLive(platform, 't1', { name: 'shop', version: '1.0.0', packages: [], ui: { entry: 'index.html', assets: ['assets/app.js'] } })
     const provisioning = new InMemoryEnvironmentProvisioning(new Map<string, EnvironmentProvisioning>([['t1', { displayName: 'T1', purpose: EnvironmentPurpose.Runtime }]]))
-    const worker = await WorkerHost.StartAsync({ port: 0, baseDir, masterKey: { base64Env: WorkerServeFixture.KeyEnv }, provisioning, tls: WorkerServeFixture.Server() })
+    const worker = await WorkerHost.StartAsync({ platform, port: 0, baseDir, masterKey: { base64Env: WorkerServeFixture.KeyEnv }, provisioning, tls: WorkerServeFixture.Server() })
     try
     {
         const port = worker.Address().port
@@ -109,28 +122,24 @@ class RuntimeWorkerFx
     public static readonly EnvironmentHeader = 'x-pragmatic-environment'
     public static readonly PackId = 'local'
     private static readonly SourceSuffix = '.todl'
-    private static readonly ManifestFile = 'application.json'
-    private static readonly LivePointerFile = 'live'
     private static readonly PackagesDir = 'packages'
     private static readonly ApplicationsDir = 'applications'
     private static readonly RootUnit = 'root'
     private static readonly RootUnitName = 'Root'
 
-    /** The environment directory with `crm` compiled into `packages/` and `crm-app` live on it. */
-    public static async Start(): Promise<string>
+    /** The environment directory with `crm` compiled into `packages/`, and `crm-app` live on it in `platform`'s database. */
+    public static async Start(platform: CustomPlatform): Promise<string>
     {
         const baseDir = mkdtempSync(join(tmpdir(), RuntimeWorkerFx.Prefix))
         const environmentDir = join(baseDir, RuntimeWorkerFx.Environment)
         const packages = join(environmentDir, RuntimeWorkerFx.PackagesDir)
-        const appDir = join(environmentDir, RuntimeWorkerFx.ApplicationsDir, RuntimeWorkerFx.App)
         mkdirSync(packages, { recursive: true })
-        mkdirSync(join(appDir, RuntimeWorkerFx.AppVersion), { recursive: true })
+        mkdirSync(join(environmentDir, RuntimeWorkerFx.ApplicationsDir), { recursive: true })
         const outcome = compilePackage([], [{ uri: RuntimeWorkerFx.Crm.id + RuntimeWorkerFx.SourceSuffix, text: RuntimeWorkerFx.CrmTodl }], RuntimeWorkerFx.Crm, [])
         assert.ok(outcome.ok, JSON.stringify(outcome.errors))
         await new BlobPackageStore(new StoragePackageSink(new NodeFsStorage(packages))).persist(outcome.package!)
         const manifest = { name: RuntimeWorkerFx.App, version: RuntimeWorkerFx.AppVersion, packages: [RuntimeWorkerFx.Crm] }
-        writeFileSync(join(appDir, RuntimeWorkerFx.AppVersion, RuntimeWorkerFx.ManifestFile), JSON.stringify(manifest))
-        writeFileSync(join(appDir, RuntimeWorkerFx.LivePointerFile), RuntimeWorkerFx.AppVersion)
+        await WorkerServeFixture.CommitLive(platform, RuntimeWorkerFx.Environment, manifest)
         process.env[RuntimeWorkerFx.KeyEnv] = randomBytes(32).toString('base64')
         return baseDir
     }
@@ -182,8 +191,9 @@ class RuntimeWorkerFx
 
 test('worker host serves runtime cypher', async () =>
 {
-    const baseDir = await RuntimeWorkerFx.Start()
-    const worker = await WorkerHost.StartAsync({ host: RuntimeWorkerFx.LocalHost, port: 0, baseDir, masterKey: { base64Env: RuntimeWorkerFx.KeyEnv }, provisioning: RuntimeWorkerFx.Provisioning(), tls: WorkerServeFixture.Server() })
+    const platform = CustomPlatformFixture.Mem()
+    const baseDir = await RuntimeWorkerFx.Start(platform)
+    const worker = await WorkerHost.StartAsync({ platform, host: RuntimeWorkerFx.LocalHost, port: 0, baseDir, masterKey: { base64Env: RuntimeWorkerFx.KeyEnv }, provisioning: RuntimeWorkerFx.Provisioning(), tls: WorkerServeFixture.Server() })
     try
     {
         const client = await RuntimeWorkerFx.Connect(worker, await RuntimeWorkerFx.TokenFor(worker))

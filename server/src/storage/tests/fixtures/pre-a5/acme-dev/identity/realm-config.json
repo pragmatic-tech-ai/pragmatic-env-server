@@ -1,0 +1,21 @@
+{
+  "configs": {
+    "acme-dev": {
+      "packId": "local",
+      "delegationDepth": 2,
+      "providerSettings": [
+        [
+          "issuer",
+          "https://idp.acme.io"
+        ]
+      ],
+      "groupRoleMap": [
+        [
+          "eng",
+          1
+        ]
+      ],
+      "claimsMapping": []
+    }
+  }
+}

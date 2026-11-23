@@ -11,7 +11,7 @@ class EnvServerComponentFixture
 {
     public static readonly Here = dirname(fileURLToPath(import.meta.url))
     public static readonly Golden = join(EnvServerComponentFixture.Here, 'fixtures', 'pragmatic-env-server.component.json')
-    public static readonly Digest = 'sha256:c80632390c7f4be5793acff795145713a84944ba2c0c6d7b939a046a3a42cbb2'
+    public static readonly Digest = 'sha256:4eb083d79e78bd84cd0d3844c6ea1bdd9d69deff021e17a376c765a09d507a22'
     public static readonly Readers = [
         ComponentSources.InPackage('@pragmatic-tech-ai/pragmatic-env-cluster', 'config', 'server-config-loader.js'),
         join(EnvServerComponentFixture.Here, '..', '..', 'storage', 'env-server-database.ts'),
@@ -40,15 +40,15 @@ describe('EnvServerComponent', () =>
         ComponentSources.AssertCovers(EnvServerComponent.Descriptor(), EnvServerComponentFixture.Readers, EnvServerComponentFixture.Undeclared)
     })
 
-    it('declares databaseUrl as a required secret read from PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE', () =>
+    it('declares the database option: databaseUrl, a required secret read from PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE', () =>
     {
-        const setting = EnvServerComponentFixture.Setting('core', 'databaseUrl')
+        const setting = EnvServerComponentFixture.Setting('database', 'databaseUrl')
         assert.equal(setting.Required, true)
         assert.equal(setting.Secret, true)
         assert.ok(setting.Description.startsWith('PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE: '))
     })
 
-    it('audit sink allows none and sql only', () =>
+    it('the audit sink defaults to sql and documents none; the retired file setting is gone', () =>
     {
         const sink = EnvServerComponentFixture.Setting('audit', 'sink')
         assert.equal(sink.Default, 'sql')

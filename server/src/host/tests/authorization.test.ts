@@ -10,6 +10,7 @@ import type { SolutionLanguageService } from '@pragmatic-tech-ai/todl/solution-s
 import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class AuthzFixture
 {
@@ -34,7 +35,7 @@ class AuthzFixture
     public static Options(baseDir: string, keyEnv: string)
     {
         const entries = new Map<string, EnvironmentProvisioning>([['t1', { displayName: 'Environment One' }]])
-        return { host: AuthzFixture.Host, port: 0, baseDir, masterKey: { base64Env: keyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries) }
+        return { host: AuthzFixture.Host, port: 0, baseDir, masterKey: { base64Env: keyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries), platform: CustomPlatformFixture.Mem() }
     }
 
     public static Cleanup(...dirs: string[]): void

@@ -1,7 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import type { IStorage } from '@pragmatic-tech-ai/todl-runtime'
 import { StructuredLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
-import { AsyncMutex } from '../cypher/async-mutex.js'
+import type { EnvironmentRecords } from '../../storage/environment-records.js'
 
 /** Where the store reports a malformed pending list (listed as empty; the next write replaces it). */
 export interface IPendingBackfillDiagnostics
@@ -38,97 +36,82 @@ class MalformedPendingBackfillError extends Error
     }
 }
 
+/** The environment's one record in the pending backfill registry: the owed concept names, sorted and unique. */
+export type PendingBackfillRecord = { id: string; concepts: string[] }
+
 /**
- * The concepts whose ownership backfill is still owed (S4 Task 13, PR16): `graphs/pending-backfill.json`, a sorted list
- * of concept names. A delivery adds its newly owned concepts BEFORE its persist step, so a crash or a lost lease between
- * the persist and the backfill cannot lose them: whichever server opens the environment next resumes them. A concept
- * leaves the list once its backfill committed, or when an open finds the catalog it launches does not own it (left by
- * a delivery whose persist step failed). Writes are atomic (temp file + rename, the temp removed on failure) and
- * serialized. A malformed file lists as empty (reported, error name only) and the next write replaces it, so a corrupt
- * list never blocks a delivery; a storage read error propagates (the delivery rejects before persisting, the backfill
- * reports and retries), so a list that could not be read is never overwritten.
+ * The concepts whose ownership backfill is still owed (S4 Task 13, PR16): one record in the env server database
+ * (registry `env_pending_backfill`, A5), a sorted unique list of concept names. A delivery adds its newly owned concepts
+ * BEFORE its persist step, so a crash or a lost lease between the persist and the backfill cannot lose them: whichever
+ * server opens the environment next resumes them. A concept leaves the list once its backfill committed, or when an open
+ * finds the catalog it launches does not own it (left by a delivery whose persist step failed). Every change is one
+ * optimistic Update of the record (concurrent writers, also on other workers, all land). A malformed record lists as
+ * empty (reported, error name only) and the next write replaces it, so a corrupt list never blocks a delivery; a
+ * database read error propagates (the delivery rejects before persisting, the backfill reports and retries), so a list
+ * that could not be read is never overwritten.
  */
 export class PendingBackfillStore
 {
-    public static readonly FileName = 'pending-backfill.json'
-    private static readonly TempPrefix = '.pending-backfill-'
-    private static readonly TempSuffix = '.tmp'
+    /** The key of the environment's one pending record. */
+    public static readonly RecordKey = 'pending'
 
-    private readonly mutex = new AsyncMutex()
-
-    public constructor(private readonly storage: IStorage, private readonly diagnostics: IPendingBackfillDiagnostics = new LoggerPendingBackfillDiagnostics())
+    public constructor(private readonly records: EnvironmentRecords<PendingBackfillRecord>, private readonly diagnostics: IPendingBackfillDiagnostics = new LoggerPendingBackfillDiagnostics())
     {
     }
 
     public Add(concepts: readonly string[]): Promise<void>
     {
-        return this.mutex.Run(async () =>
-        {
-            const pending = new Set(await this.List())
-            const size = pending.size
-            for (const concept of concepts) pending.add(concept)
-            if (pending.size !== size) await this.Write([...pending])
-        })
+        return this.Change(pending => [...new Set([...pending, ...concepts])])
     }
 
     public Remove(concepts: readonly string[]): Promise<void>
     {
-        return this.mutex.Run(async () =>
-        {
-            const removed = new Set(concepts)
-            const pending = await this.List()
-            const kept = pending.filter(concept => !removed.has(concept))
-            if (kept.length !== pending.length) await this.Write(kept)
-        })
+        const removed = new Set(concepts)
+        return this.Change(pending => pending.filter(concept => !removed.has(concept)))
     }
 
     /** Keeps only the owed concepts `owned` holds (the catalog an open launches). */
     public Retain(owned: ReadonlySet<string>): Promise<void>
     {
-        return this.mutex.Run(async () =>
-        {
-            const pending = await this.List()
-            const kept = pending.filter(concept => owned.has(concept))
-            if (kept.length !== pending.length) await this.Write(kept)
-        })
+        return this.Change(pending => pending.filter(concept => owned.has(concept)))
     }
 
     /**
-     * The owed concepts; empty when none were ever recorded or the stored content is malformed (reported). A storage
+     * The owed concepts; empty when none were ever recorded or the stored content is malformed (reported). A database
      * read error propagates (fail closed): a valid list is never overwritten because it could not be read.
      */
     public async List(): Promise<string[]>
     {
-        if (!(await this.storage.Exists(PendingBackfillStore.FileName)))
-        {
-            return []
-        }
-        const text = await this.storage.ReadText(PendingBackfillStore.FileName)
-        try
-        {
-            const concepts: unknown = JSON.parse(text)
-            if (!Array.isArray(concepts) || !concepts.every(concept => typeof concept === 'string')) throw new MalformedPendingBackfillError()
-            return concepts as string[]
-        }
-        catch (error)
-        {
-            this.diagnostics.Unreadable(error)
-            return []
-        }
+        return this.ConceptsOf(await this.records.Get(PendingBackfillStore.RecordKey))
     }
 
-    private async Write(concepts: readonly string[]): Promise<void>
+    /** Writes `next(pending)` sorted, unless it equals what is stored (re-computed on the latest record when written). */
+    private async Change(next: (pending: readonly string[]) => string[]): Promise<void>
     {
-        const temp = PendingBackfillStore.TempPrefix + randomUUID() + PendingBackfillStore.TempSuffix
-        try
+        const pending = this.ConceptsOf(await this.records.Get(PendingBackfillStore.RecordKey))
+        if (PendingBackfillStore.Same(pending, next(pending).sort()))
         {
-            await this.storage.WriteText(temp, JSON.stringify([...concepts].sort()))
-            await this.storage.Rename(temp, PendingBackfillStore.FileName)
+            return
         }
-        catch (error)
+        await this.records.Update(PendingBackfillStore.RecordKey, current => ({ id: PendingBackfillStore.RecordKey, concepts: next(this.ConceptsOf(current)).sort() }))
+    }
+
+    private static Same(a: readonly string[], b: readonly string[]): boolean
+    {
+        return a.length === b.length && a.every((concept, i) => concept === b[i])
+    }
+
+    private ConceptsOf(record: PendingBackfillRecord | undefined): string[]
+    {
+        if (record === undefined)
         {
-            await this.storage.Delete(temp).catch(() => undefined)
-            throw error
+            return []
         }
+        if (!Array.isArray(record.concepts) || !record.concepts.every(concept => typeof concept === 'string'))
+        {
+            this.diagnostics.Unreadable(new MalformedPendingBackfillError())
+            return []
+        }
+        return [...record.concepts].sort()
     }
 }

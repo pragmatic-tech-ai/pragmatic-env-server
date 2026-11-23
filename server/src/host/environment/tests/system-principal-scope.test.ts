@@ -8,6 +8,7 @@ import { PragmaticServer } from '../../../pragmatic-server.js'
 import { EnvironmentPurpose } from '../../../environments/environment-purpose.js'
 import { EnvironmentFixture } from './environment-fixture.js'
 import { Tier1Fx } from './tier1-fixture.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
 
 class SystemFx
 {
@@ -94,7 +95,7 @@ describe('system principal scope', () =>
 
     test('development environment has no system scope', async () =>
     {
-        const server = new PragmaticServer({ purpose: EnvironmentPurpose.Development })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, purpose: EnvironmentPurpose.Development })
         try
         {
             await assert.rejects(server.SystemScope(), SystemFx.RuntimeOnly)

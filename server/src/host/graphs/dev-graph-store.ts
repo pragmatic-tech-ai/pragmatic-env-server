@@ -1,36 +1,31 @@
-import type { IStorage } from '@pragmatic-tech-ai/todl-runtime'
+import type { EnvironmentRecords } from '../../storage/environment-records.js'
 
 export type PackageRef = { id: string; version: string }
 
 /** Slices are keyed by stable solution id; each holds that solution's contributed package refs. */
 export type DevGraphRecord = { name: string; description: string; slices: Record<string, PackageRef[]>; createdAt: string }
 
-type GraphsDocument = { graphs: Record<string, DevGraphRecord> }
+/** One graph's row in the dev graphs registry (keyed by graph name). */
+export type DevGraphRow = { id: string; graph: DevGraphRecord }
 
-/** Returns defensive copies so callers cannot mutate persisted state. Persistent store of a dev environment's graph records: one JSON document in the environment graphs volume, over IStorage. */
+/** Persistent store of a dev environment's graph records: one record per graph name in the env server database (registry
+ *  `env_dev_graphs`, A5). `Load` reads the environment's graphs into memory; reads return defensive copies so callers
+ *  cannot mutate persisted state; Put and Remove write through. */
 export class DevGraphStore
 {
-    private static readonly FileName = 'graphs.json'
-    private static readonly RootKey = 'graphs'
-
     private readonly records = new Map<string, DevGraphRecord>()
 
-    public constructor(private readonly storage: IStorage)
+    public constructor(private readonly rows: EnvironmentRecords<DevGraphRow>)
     {
     }
 
     public async Load(): Promise<void>
     {
+        const rows = await this.rows.List()
         this.records.clear()
-        if (!(await this.storage.Exists(DevGraphStore.FileName)))
+        for (const row of rows)
         {
-            return
-        }
-        const document = JSON.parse(await this.storage.ReadText(DevGraphStore.FileName)) as Partial<GraphsDocument>
-        const graphs = document[DevGraphStore.RootKey] ?? {}
-        for (const [name, record] of Object.entries(graphs))
-        {
-            this.records.set(name, DevGraphStore.Copy(record))
+            this.records.set(row.id, DevGraphStore.Copy(row.graph))
         }
     }
 
@@ -47,17 +42,18 @@ export class DevGraphStore
 
     public async Put(record: DevGraphRecord): Promise<void>
     {
+        await this.rows.Put({ id: record.name, graph: DevGraphStore.Copy(record) })
         this.records.set(record.name, DevGraphStore.Copy(record))
-        await this.Persist()
     }
 
     public async Remove(name: string): Promise<void>
     {
+        await this.rows.Delete(name)
         this.records.delete(name)
-        await this.Persist()
     }
 
-    private static Copy(record: DevGraphRecord): DevGraphRecord
+    /** A deep copy holding only the record's fields. */
+    public static Copy(record: DevGraphRecord): DevGraphRecord
     {
         const slices: Record<string, PackageRef[]> = {}
         for (const [solutionId, refs] of Object.entries(record.slices ?? {}))
@@ -65,11 +61,5 @@ export class DevGraphStore
             slices[solutionId] = refs.map(p => ({ id: p.id, version: p.version }))
         }
         return { name: record.name, description: record.description, slices, createdAt: record.createdAt }
-    }
-
-    private async Persist(): Promise<void>
-    {
-        const document: GraphsDocument = { [DevGraphStore.RootKey]: Object.fromEntries(this.records) }
-        await this.storage.WriteText(DevGraphStore.FileName, JSON.stringify(document, null, 2))
     }
 }

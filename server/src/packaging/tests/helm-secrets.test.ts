@@ -63,3 +63,15 @@ test('the provisioned volume/env are gated and the existingSecret overrides the 
     assert.match(deployment, /\{\{- if or \.Values\.secrets\.provisioned \.Values\.secrets\.provisionedExistingSecret \}\}/)
     assert.match(deployment, /secretName: \{\{ \.Values\.secrets\.provisionedExistingSecret \| default/)
 })
+
+test('the chart requires database.urlSecret (the render fails naming it when empty) and both workloads mount the database URL file', () =>
+{
+    for (const workload of ['deployment.yaml', 'worker-statefulset.yaml'])
+    {
+        const text = Chart.Text(join('templates', workload))
+        assert.match(text, /required "database\.urlSecret is required/, workload)
+        assert.match(text, /PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE\n\s+value: \/run\/secrets\/pragmatic-env-server\/database-url/, workload)
+        assert.match(text, /mountPath: \/run\/secrets\/pragmatic-env-server\n\s+readOnly: true/, workload)
+    }
+    assert.match(Chart.Text('values.yaml'), /database:\n\s+urlSecret: \S+\n\s+urlKey: database-url/)
+})

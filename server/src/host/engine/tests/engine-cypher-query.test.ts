@@ -21,6 +21,7 @@ import { DevSnapshotSource } from '../dev-snapshot-source.js'
 import type { IEngineSnapshot, IGraphEngineHost } from '../graph-engine-host.js'
 import { ServerModelWorkspace } from '../server-model-workspace.js'
 import { EngineHostFx, HeldFence } from './engine-host-fixture.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
 
 /** What one dev query asks beyond its text. */
 interface IQueryOptions
@@ -173,7 +174,7 @@ class DevCypherFx
             cpSync(join(import.meta.dirname, '..', '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
             writeFileSync(join(solution, DevCypherFx.ModelsDir, DevCypherFx.ModelFileName), modelTodl!)
         }
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         const world = new DevCypherWorld(server, solution)
         try
         {

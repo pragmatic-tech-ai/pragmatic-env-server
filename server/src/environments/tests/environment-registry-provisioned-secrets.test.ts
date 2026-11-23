@@ -8,6 +8,7 @@ import { InMemoryEnvironmentCoordinator } from '../environment-coordinator.js'
 import { EnvironmentRegistry, InMemoryEnvironmentProvisioning } from '../environment-registry.js'
 import type { EnvironmentProvisioning } from '../environment-provisioning.js'
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 test('the provisioned source threads through the registry and writes both named refs into the environment store', async () =>
 {
@@ -22,7 +23,7 @@ test('the provisioned source threads through the registry and writes both named 
     })
     const provisioning = new InMemoryEnvironmentProvisioning(entries)
     const source = ProvisionedSecretSource.FromText('{"t1/bootstrap/admin":"admin-pw-12345","t1/oidc/client-secret":"oidc-secret-xyz"}')
-    const registry = new EnvironmentRegistry(baseDir, { base64Env: keyEnv }, provisioning, new InMemoryEnvironmentCoordinator(), undefined, undefined, undefined, source)
+    const registry = new EnvironmentRegistry(baseDir, { base64Env: keyEnv }, provisioning, new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem(), undefined, undefined, source)
     try
     {
         const server = await registry.ServerFor('t1')

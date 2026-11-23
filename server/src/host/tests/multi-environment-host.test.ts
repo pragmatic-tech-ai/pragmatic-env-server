@@ -10,17 +10,25 @@ import type { SolutionLanguageService } from '@pragmatic-tech-ai/todl/solution-s
 import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
-import { NodePlatform } from '../../platform/node-platform.js'
-import { DeploymentMode } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatform } from '../../platform/custom-platform.js'
+import type { PlatformServices } from '../../platform/platform-services.js'
+import { EnvServerTestDatabase } from '../../storage/tests/env-server-test-database.js'
+import { NodeStorageProviderRegistry } from '@pragmatic-tech-ai/pragmatic-realm-custom'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
-class RecordingPlatform extends NodePlatform
+class RecordingPlatform extends CustomPlatform
 {
-    public identityRoots: string[] = []
+    public environmentIds: string[] = []
 
-    public override CreateIdentityStores(identityRoot: string, masterKey: Buffer): Promise<IdentityStoreSet>
+    public constructor()
     {
-        this.identityRoots.push(identityRoot)
-        return super.CreateIdentityStores(identityRoot, masterKey)
+        super(EnvServerTestDatabase.Mem(), new NodeStorageProviderRegistry())
+    }
+
+    public override CreateIdentityStores(environmentId: string, masterKey: Buffer): Promise<IdentityStoreSet>
+    {
+        this.environmentIds.push(environmentId)
+        return super.CreateIdentityStores(environmentId, masterKey)
     }
 }
 
@@ -55,9 +63,9 @@ class MtFixture
         return new InMemoryEnvironmentProvisioning(entries)
     }
 
-    public static Options(baseDir: string, provisioning: InMemoryEnvironmentProvisioning)
+    public static Options(baseDir: string, provisioning: InMemoryEnvironmentProvisioning, platform: PlatformServices = CustomPlatformFixture.Mem())
     {
-        return { host: MtFixture.Host, port: 0, baseDir, masterKey: { base64Env: MtFixture.KeyEnv }, provisioning }
+        return { host: MtFixture.Host, port: 0, baseDir, masterKey: { base64Env: MtFixture.KeyEnv }, provisioning, platform }
     }
 
     public static async TokenFor(host: PragmaticServerHost, environmentId: string): Promise<string>
@@ -191,23 +199,7 @@ test('a platform passed in the host options is forwarded into the per-environmen
     try
     {
         await host.IdentityPackForTest('t1')
-        assert.equal(platform.identityRoots.length, 1)
-        assert.ok(platform.identityRoots[0].includes('t1'))
-    }
-    finally
-    {
-        await host.DisposeAsync()
-        MtFixture.Cleanup(baseDir)
-    }
-})
-
-test('deploymentMode threads through the host: Cloud without a platform bundle fails closed', async () =>
-{
-    const { baseDir } = MtFixture.Start('t1')
-    const host = await PragmaticServerHost.StartAsync({ ...MtFixture.Options(baseDir, MtFixture.Provisioning('t1')), deploymentMode: DeploymentMode.Cloud })
-    try
-    {
-        await assert.rejects(() => host.IdentityPackForTest('t1'), /explicit platform bundle/)
+        assert.deepEqual(platform.environmentIds, ['t1'])
     }
     finally
     {

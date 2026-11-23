@@ -7,6 +7,7 @@ import { ModuleStateKind } from '@pragmatic-tech-ai/todl-runtime'
 import { SolutionManagerService } from '@pragmatic-tech-ai/todl'
 import { PragmaticServer } from '../pragmatic-server.js'
 import { SolutionServicesModule, LanguageServiceModule } from '../composition/server-modules.js'
+import { CustomPlatformFixture } from '../platform/tests/custom-platform-fixture.js'
 
 class ServerFixture
 {
@@ -17,7 +18,7 @@ class ServerFixture
     public static OverTemp(): PragmaticServer
     {
         const packagesRoot = mkdtempSync(join(tmpdir(), ServerFixture.TempPrefix))
-        return new PragmaticServer({ packagesRoot })
+        return new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot })
     }
 }
 

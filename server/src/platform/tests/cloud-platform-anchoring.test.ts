@@ -1,10 +1,21 @@
 import { test } from 'node:test'
+import type { IAuditSink } from '@pragmatic-tech-ai/pragmatic-identity'
+import type { PlatformServices } from '../platform-services.js'
 import assert from 'node:assert/strict'
 import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/testing'
 import { AuditEvent, AuditEventKind } from '@pragmatic-tech-ai/pragmatic-identity'
 import { AuditTamperDetected } from '@pragmatic-tech-ai/pragmatic-identity-realm'
 import { PgSession, ObjectStoreProviderRegistry, CloudSecretManagerSecretStore } from '@pragmatic-tech-ai/pragmatic-realm-adapters'
 import { CloudPlatform } from '../cloud-platform.js'
+
+/** The identity audit (hash-chained, anchored) of a platform: the access audit is a table of its own. */
+class AnchoringAudit
+{
+    public static async Of(platform: PlatformServices): Promise<IAuditSink>
+    {
+        return (await platform.CreateIdentityStores('t1', platform.ResolveMasterKey({ keyFilePath: 'unused' }))).Audit
+    }
+}
 
 class AnchoringFixture
 {
@@ -38,7 +49,7 @@ test('anchoring on: audit records are checkpointed into identity_audit_anchor', 
     const session = AnchoringFixture.Session()
     const secretManager = await AnchoringFixture.SecretManager(true)
     const platform = await CloudPlatform.Create({ session, storage: new ObjectStoreProviderRegistry(), secretManager, masterKeyRef: AnchoringFixture.MasterRef, auditAnchorKeyRef: AnchoringFixture.AnchorRef })
-    const audit = await platform.AuditSink()
+    const audit = await AnchoringAudit.Of(platform)
     await audit.Record(AnchoringFixture.Event('t1', 'a'))
     await audit.Record(AnchoringFixture.Event('t2', 'x'))
     const rows = await session.Query('SELECT realm_id, seq FROM identity_audit_anchor ORDER BY realm_id, seq', [])
@@ -50,13 +61,13 @@ test('anchoring on: a tail DELETE is detected fail-closed when a fresh platform 
     const session = AnchoringFixture.Session()
     const secretManager = await AnchoringFixture.SecretManager(true)
     const first = await CloudPlatform.Create({ session, storage: new ObjectStoreProviderRegistry(), secretManager, masterKeyRef: AnchoringFixture.MasterRef, auditAnchorKeyRef: AnchoringFixture.AnchorRef })
-    const audit = await first.AuditSink()
+    const audit = await AnchoringAudit.Of(first)
     await audit.Record(AnchoringFixture.Event('t1', 'a'))
     await audit.Record(AnchoringFixture.Event('t1', 'b'))
     await audit.Record(AnchoringFixture.Event('t1', 'c'))
     await session.Execute('DELETE FROM identity_audit WHERE realm_id = $1 AND seq >= $2', ['t1', 2])
     const second = await CloudPlatform.Create({ session, storage: new ObjectStoreProviderRegistry(), secretManager, masterKeyRef: AnchoringFixture.MasterRef, auditAnchorKeyRef: AnchoringFixture.AnchorRef })
-    await assert.rejects(() => second.AuditSink(), AuditTamperDetected)
+    await assert.rejects(() => AnchoringAudit.Of(second), AuditTamperDetected)
 })
 
 test('anchor key ref set but secret absent: Create rejects without leaking', async () =>
@@ -77,7 +88,7 @@ test('anchoring off: no identity_audit_anchor table is created', async () =>
     const session = AnchoringFixture.Session()
     const secretManager = await AnchoringFixture.SecretManager(false)
     const platform = await CloudPlatform.Create({ session, storage: new ObjectStoreProviderRegistry(), secretManager, masterKeyRef: AnchoringFixture.MasterRef })
-    const audit = await platform.AuditSink()
+    const audit = await AnchoringAudit.Of(platform)
     await audit.Record(AnchoringFixture.Event('t1', 'a'))
     await assert.rejects(() => session.Query('SELECT * FROM identity_audit_anchor', []), /does not exist/)
 })

@@ -34,7 +34,7 @@ describe('security catalog reader', () =>
         {
             await fx.Package(ref.id, ref.version, todl)
         }
-        fx.Live(Tier1Fx.AppName, Tier1Fx.AppVersion, [Tier1Fx.Hr, Tier1Fx.Projects, Tier1Fx.Crm, Tier1Fx.Ext])
+        await fx.Live(Tier1Fx.AppName, Tier1Fx.AppVersion, [Tier1Fx.Hr, Tier1Fx.Projects, Tier1Fx.Crm, Tier1Fx.Ext])
         catalog = (await fx.Host().Snapshot()).Catalog
     })
 
@@ -98,7 +98,7 @@ describe('security catalog reader on an empty environment', () =>
     before(async () =>
     {
         await fx.Package(Empty.id, Empty.version, 'namespace empty { }\n')
-        fx.Live('bare', '1.0.0', [Empty])
+        await fx.Live('bare', '1.0.0', [Empty])
         catalog = (await fx.Host().Snapshot()).Catalog
     })
 

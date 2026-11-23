@@ -86,3 +86,20 @@ test('the example environments file parses through FileEnvironmentProvisioning',
     const provisioning = FileEnvironmentProvisioning.FromText(Artifacts.EnvironmentsExample())
     assert.ok(provisioning.OptionsFor('acme') !== null)
 })
+
+test('compose starts env-server with a database', () =>
+{
+    for (const [doc, servers] of [[Artifacts.Compose(), [Artifacts.ServerService]], [Artifacts.Cluster(), Artifacts.Workers]] as const)
+    {
+        const postgres = doc.services['pragmatic-postgres'] as ComposeService & { read_only?: boolean }
+        assert.match(postgres.image ?? '', /^ghcr\.io\/pragmatic-tech-ai\/pragmatic-postgres:/)
+        assert.equal(postgres.read_only, true)
+        for (const name of servers)
+        {
+            const server = doc.services[name] as ComposeService & { environment?: Record<string, string>; depends_on?: string[]; volumes?: string[] }
+            assert.equal(server.environment?.PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE, '/run/secrets/pragmatic-env-server/database-url', name)
+            assert.ok(server.depends_on?.includes('pragmatic-postgres'), name)
+            assert.ok(server.volumes?.some(v => v.endsWith(':/run/secrets/pragmatic-env-server/database-url:ro')), name)
+        }
+    }
+})

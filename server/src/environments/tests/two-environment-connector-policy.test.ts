@@ -11,6 +11,7 @@ import { InMemoryEnvironmentCoordinator } from '../environment-coordinator.js'
 import type { EnvironmentProvisioning } from '../environment-provisioning.js'
 import { ConnectorsPolicy } from '../../host/connector-policy.js'
 import { DevConnectorRead } from '../../host/engine/tests/dev-connector-read.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class TwoEnvironmentPolicyFixture
 {
@@ -73,7 +74,7 @@ namespace shop {
         const dir1 = TwoEnvironmentPolicyFixture.SolutionDir()
         const dir2 = TwoEnvironmentPolicyFixture.SolutionDir()
         process.env[TwoEnvironmentPolicyFixture.KeyEnv] = randomBytes(32).toString('base64')
-        const registry = new EnvironmentRegistry(baseDir, { base64Env: TwoEnvironmentPolicyFixture.KeyEnv }, TwoEnvironmentPolicyFixture.Provisioning(), new InMemoryEnvironmentCoordinator())
+        const registry = new EnvironmentRegistry(baseDir, { base64Env: TwoEnvironmentPolicyFixture.KeyEnv }, TwoEnvironmentPolicyFixture.Provisioning(), new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem())
         try
         {
             const s1 = await registry.ServerFor(TwoEnvironmentPolicyFixture.EnvironmentOneId)

@@ -10,6 +10,7 @@ import { WorkerHost } from '../worker-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import type { MachineTlsRef } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixture
 {
@@ -45,7 +46,7 @@ test('a worker serves /healthz + /readyz on its dedicated plain-HTTP health port
 {
     const baseDir = mkdtempSync(join(tmpdir(), 'ps-whh-'))
     process.env[Fixture.KeyEnv] = randomBytes(32).toString('base64')
-    const worker = await WorkerHost.StartAsync({ port: 0, baseDir, masterKey: { base64Env: Fixture.KeyEnv }, provisioning: Fixture.Provisioning(), tls: Fixture.Tls(), healthPort: 0 })
+    const worker = await WorkerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), port: 0, baseDir, masterKey: { base64Env: Fixture.KeyEnv }, provisioning: Fixture.Provisioning(), tls: Fixture.Tls(), healthPort: 0 })
     try
     {
         assert.equal(await Fixture.Get(worker.HealthAddressForTest().port, '/healthz'), 200)
@@ -63,7 +64,7 @@ test('an unreachable Redis makes /readyz 503 (ownership unhealthy) while /health
 {
     const baseDir = mkdtempSync(join(tmpdir(), 'ps-whh-dn-'))
     process.env[Fixture.KeyEnv] = randomBytes(32).toString('base64')
-    const worker = await WorkerHost.StartAsync({ port: 0, baseDir, masterKey: { base64Env: Fixture.KeyEnv }, provisioning: Fixture.Provisioning(), tls: Fixture.Tls(), healthPort: 0, redisUrl: 'redis://127.0.0.1:1' })
+    const worker = await WorkerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), port: 0, baseDir, masterKey: { base64Env: Fixture.KeyEnv }, provisioning: Fixture.Provisioning(), tls: Fixture.Tls(), healthPort: 0, redisUrl: 'redis://127.0.0.1:1' })
     try
     {
         assert.equal(await Fixture.Get(worker.HealthAddressForTest().port, '/healthz'), 200)

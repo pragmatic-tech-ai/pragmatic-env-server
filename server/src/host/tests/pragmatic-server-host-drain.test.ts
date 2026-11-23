@@ -14,6 +14,7 @@ import { InMemoryEnvironmentProvisioning } from '../../environments/environment-
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import { StructuredLogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { DrainController, type IInFlightSource, type Observability } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class DrainFixture
 {
@@ -27,7 +28,7 @@ class DrainFixture
         const keyPath = join(baseDir, 'key')
         writeFileSync(keyPath, randomBytes(32))
         const logger = lines === undefined ? undefined : StructuredLogger.ToSink(line => lines.push(line))
-        return PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir, masterKey: { keyFilePath: keyPath }, provisioning: DrainFixture.Provisioning(), drainTimeoutMs, logger, observability })
+        return PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir, masterKey: { keyFilePath: keyPath }, provisioning: DrainFixture.Provisioning(), drainTimeoutMs, logger, observability })
     }
 
     public static Get(port: number, path: string): Promise<number>
@@ -262,7 +263,7 @@ test('on timeout a live ws client is terminated and the log shows drained=false 
     const keyEnv = 'PS_DRAIN_KEY'
     process.env[keyEnv] = randomBytes(32).toString('base64')
     const logger = StructuredLogger.ToSink(line => lines.push(line))
-    const host = await PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: keyEnv }, provisioning: DrainFixture.Provisioning(), drainTimeoutMs: 100, logger })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: keyEnv }, provisioning: DrainFixture.Provisioning(), drainTimeoutMs: 100, logger })
     host.SetDrainSourceForTest({ InFlight: () => 1 })
     host.SetDrainControllerForTest(new FakeClock().Controller(100))
     try

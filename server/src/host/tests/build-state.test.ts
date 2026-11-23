@@ -10,6 +10,7 @@ import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { BuildStateMapper } from '../build-state-mapper.js'
 import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role, ResourceRef, ResourceKind, ResourceAuthorizationPolicy } from '@pragmatic-tech-ai/pragmatic-identity'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class ContextFixture
 {
@@ -139,7 +140,7 @@ class BuildStateFixture
     public static async Run(context: AccessContext, body: (server: PragmaticServer, client: PragmaticClient, language: SolutionLanguageService, attach: () => PragmaticClient) => Promise<void>): Promise<void>
     {
         const packages = mkdtempSync(join(tmpdir(), BuildStateFixture.PackagesPrefix))
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         const languageService = await server.LanguageService()
         const manager = await server.Manager()

@@ -5,7 +5,7 @@
   "options": [
     {
       "name": "core",
-      "description": "The server process: listener, state folder, database, environments and master key.",
+      "description": "The server process: listener, state folder, environments and master key.",
       "settings": [
         {
           "name": "host",
@@ -29,13 +29,6 @@
           "required": true,
           "secret": false,
           "description": "PRAGMATIC_BASE_DIR: The state folder."
-        },
-        {
-          "name": "databaseUrl",
-          "type": "string",
-          "required": true,
-          "secret": true,
-          "description": "PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE: The URL of the server's own Postgres database, where every record of every environment it hosts lives (a mounted secret file; deploymentMode cloud uses the provider database of its option instead)."
         },
         {
           "name": "deploymentMode",
@@ -122,6 +115,19 @@
           "required": false,
           "secret": false,
           "description": "PRAGMATIC_HEALTH_PORT: Separate port for /healthz and /readyz (served on the main listener when unset)."
+        }
+      ]
+    },
+    {
+      "name": "database",
+      "description": "The server's own Postgres database (deploymentMode local; cloud uses the provider database of its option).",
+      "settings": [
+        {
+          "name": "databaseUrl",
+          "type": "string",
+          "required": true,
+          "secret": true,
+          "description": "PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE: The URL of the server's own Postgres database, where every record of every environment it hosts lives (a mounted secret file; its content is never logged)."
         }
       ]
     },

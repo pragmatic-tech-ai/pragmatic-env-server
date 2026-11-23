@@ -6,10 +6,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AuthMethod, PresentedSecret, Credential, AuthenticatedResult } from '@pragmatic-tech-ai/pragmatic-identity'
 import { PragmaticServer } from '../../pragmatic-server.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
+import type { PlatformServices } from '../../platform/platform-services.js'
 
 interface IRotationDirs
 {
-    identityRoot: string
+    platform: PlatformServices
     packagesRoot: string
     keyEnv: string
 }
@@ -22,16 +24,14 @@ class RotationFixture
 
     public static Dirs(): IRotationDirs
     {
-        const identityRoot = mkdtempSync(join(tmpdir(), 'ps-rot-id-'))
         const packagesRoot = mkdtempSync(join(tmpdir(), 'ps-rot-pkg-'))
         const keyEnv = RotationFixture.KeyEnv
         process.env[keyEnv] = randomBytes(32).toString('base64')
-        return { identityRoot, packagesRoot, keyEnv }
+        return { platform: CustomPlatformFixture.Mem(), packagesRoot, keyEnv }
     }
 
     public static Cleanup(d: IRotationDirs): void
     {
-        rmSync(d.identityRoot, { recursive: true, force: true })
         rmSync(d.packagesRoot, { recursive: true, force: true })
         delete process.env[d.keyEnv]
     }
@@ -39,9 +39,9 @@ class RotationFixture
     public static Options(d: IRotationDirs, allowRotation: boolean)
     {
         return {
+            platform: d.platform,
             packagesRoot: d.packagesRoot,
             identity: {
-                identityRoot: d.identityRoot,
                 masterKey: { base64Env: d.keyEnv },
                 environment: { id: 't1', displayName: 'Environment One' },
                 bootstrap: { adminEmail: RotationFixture.Email, adminPrincipalId: 'admin', adminPasswordRef: RotationFixture.PasswordRef, ownerGrant: true, allowAdminPasswordRotation: allowRotation },

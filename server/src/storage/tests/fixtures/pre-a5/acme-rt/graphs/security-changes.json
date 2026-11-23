@@ -1,0 +1,38 @@
+[
+  {
+    "at": "2026-11-02T00:00:00.000Z",
+    "delivery": "suite",
+    "version": "2",
+    "roleDefaults": [],
+    "profileDefaults": [],
+    "securedFieldsAdded": [
+      {
+        "concept": "hr.Employee",
+        "field": "Bonus"
+      }
+    ],
+    "securedFieldsRemoved": [],
+    "roleOverridesDropped": [],
+    "profileOverridesDropped": [],
+    "rolesRemoved": [],
+    "profilesRemoved": []
+  },
+  {
+    "at": "2026-11-01T00:00:00.000Z",
+    "delivery": "suite",
+    "version": "1",
+    "roleDefaults": [],
+    "profileDefaults": [],
+    "securedFieldsAdded": [
+      {
+        "concept": "hr.Employee",
+        "field": "Bonus"
+      }
+    ],
+    "securedFieldsRemoved": [],
+    "roleOverridesDropped": [],
+    "profileOverridesDropped": [],
+    "rolesRemoved": [],
+    "profilesRemoved": []
+  }
+]

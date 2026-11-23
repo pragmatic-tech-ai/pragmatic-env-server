@@ -1,0 +1,23 @@
+{
+  "graphs": {
+    "hr": {
+      "name": "hr",
+      "description": "People",
+      "slices": {
+        "sol-1": [
+          {
+            "id": "hr",
+            "version": "1.0.0"
+          }
+        ]
+      },
+      "createdAt": "2026-10-20T00:00:00.000Z"
+    },
+    "crm": {
+      "name": "crm",
+      "description": "Customers",
+      "slices": {},
+      "createdAt": "2026-10-21T00:00:00.000Z"
+    }
+  }
+}

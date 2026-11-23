@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PragmaticServer } from '../pragmatic-server.js'
 import { EnvironmentPurpose } from '../environments/environment-purpose.js'
+import { CustomPlatformFixture } from '../platform/tests/custom-platform-fixture.js'
 
 class ApplicationsServerFixture
 {
@@ -22,9 +23,9 @@ test('Applications throws on a development environment', () =>
     const f = new ApplicationsServerFixture()
     try
     {
-        const server = new PragmaticServer({ applicationsRoot: f.Dir })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, applicationsRoot: f.Dir })
         assert.throws(() => server.Applications(), /runtime-environment feature/)
-        const dev = new PragmaticServer({ purpose: EnvironmentPurpose.Development, applicationsRoot: f.Dir })
+        const dev = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, purpose: EnvironmentPurpose.Development, applicationsRoot: f.Dir })
         assert.throws(() => dev.Applications(), /runtime-environment feature/)
     }
     finally { f.Dispose() }
@@ -35,15 +36,16 @@ test('Applications and AppsStorage are memoised on a runtime environment', () =>
     const f = new ApplicationsServerFixture()
     try
     {
-        const server = new PragmaticServer({ purpose: EnvironmentPurpose.Runtime, applicationsRoot: f.Dir })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, purpose: EnvironmentPurpose.Runtime, applicationsRoot: f.Dir })
         assert.equal(server.Applications(), server.Applications())
         assert.equal(server.AppsStorage(), server.AppsStorage())
     }
     finally { f.Dispose() }
 })
 
-test('Applications throws when a runtime environment has no applicationsRoot', () =>
+test('AppsStorage throws when a runtime environment has no applicationsRoot; Applications (the registry records) needs none', async () =>
 {
-    const server = new PragmaticServer({ purpose: EnvironmentPurpose.Runtime })
-    assert.throws(() => server.Applications(), /applicationsRoot is required/)
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, purpose: EnvironmentPurpose.Runtime })
+    assert.throws(() => server.AppsStorage(), /applicationsRoot is required/)
+    assert.deepEqual(await server.Applications().List(), [])
 })

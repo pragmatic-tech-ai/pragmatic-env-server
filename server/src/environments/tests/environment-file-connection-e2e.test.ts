@@ -14,6 +14,7 @@ import { FileConnectionResolver } from '../../host/file-connection-resolver.js'
 import type { FileConnection } from '../../host/file-connection-resolver.js'
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
 import { DevConnectorRead } from '../../host/engine/tests/dev-connector-read.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixture
 {
@@ -88,7 +89,7 @@ namespace shop {
         const dir2 = Fixture.SolutionDir(Fixture.ModelUndeclared)
         process.env[Fixture.KeyEnv] = randomBytes(32).toString('base64')
         const source = ProvisionedSecretSource.FromText('{"t1/crm/pw":"db-password"}')
-        const registry = new EnvironmentRegistry(baseDir, { base64Env: Fixture.KeyEnv }, Fixture.Provisioning(), new InMemoryEnvironmentCoordinator(), undefined, undefined, undefined, source)
+        const registry = new EnvironmentRegistry(baseDir, { base64Env: Fixture.KeyEnv }, Fixture.Provisioning(), new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem(), undefined, undefined, source)
         try
         {
             const s1 = await registry.ServerFor('t1')

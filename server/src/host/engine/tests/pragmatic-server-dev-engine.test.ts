@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PragmaticServer } from '../../../pragmatic-server.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
 
 class ServerDevEngineFx
 {
@@ -14,7 +15,7 @@ class ServerDevEngineFx
 test('the server memoizes its dev engine and refuses one once disposed', async () =>
 {
     const packages = mkdtempSync(join(tmpdir(), ServerDevEngineFx.Prefix))
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     try
     {
         const engine = server.DevEngine()

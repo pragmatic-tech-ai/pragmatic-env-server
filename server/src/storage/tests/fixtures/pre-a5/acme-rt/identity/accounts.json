@@ -1,0 +1,28 @@
+{
+  "accounts": [
+    {
+      "principalId": "rita",
+      "realmId": "acme-rt",
+      "email": "rita@acme.io",
+      "secretRef": "rita-pw",
+      "disabled": false
+    },
+    {
+      "principalId": "gone",
+      "realmId": "acme-rt",
+      "email": "gone@acme.io",
+      "secretRef": "gone-pw",
+      "disabled": true
+    }
+  ],
+  "groups": [
+    {
+      "groupId": "eng",
+      "realmId": "acme-rt",
+      "name": "Engineering",
+      "memberIds": [
+        "rita"
+      ]
+    }
+  ]
+}

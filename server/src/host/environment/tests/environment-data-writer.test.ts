@@ -107,8 +107,8 @@ class WriterFx
         {
             await fx.Package(WriterFx.Crm.id, WriterFx.Crm.version, WriterFx.CrmTodl)
             await fx.Package(WriterFx.Ext.id, WriterFx.Ext.version, WriterFx.ExtTodl)
-            fx.Live(WriterFx.App, WriterFx.AppVersion, [WriterFx.Crm])
-            fx.Live(WriterFx.ExtApp, WriterFx.AppVersion, [WriterFx.Ext])
+            await fx.Live(WriterFx.App, WriterFx.AppVersion, [WriterFx.Crm])
+            await fx.Live(WriterFx.ExtApp, WriterFx.AppVersion, [WriterFx.Ext])
             fx.Source.Adapter.Seed(WriterFx.CustomerSource, [{ [WriterFx.CustomerKey]: WriterFx.AcmeKey, [WriterFx.NameField]: WriterFx.Acme }])
             await fx.Start(options)
             await body(fx)

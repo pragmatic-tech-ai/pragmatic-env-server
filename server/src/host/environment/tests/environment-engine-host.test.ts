@@ -306,8 +306,8 @@ describe('environment engine host', () =>
     {
         await HostFx.Run(async fx =>
         {
-            fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
-            fx.Live(HostFx.ExtApp, HostFx.AppVersion, [HostFx.Ext])
+            await fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
+            await fx.Live(HostFx.ExtApp, HostFx.AppVersion, [HostFx.Ext])
             await fx.Promote(HostFx.PromoteSet, [HostFx.Ref])
             const host = fx.Host()
             const engine = await host.Engine()
@@ -332,7 +332,7 @@ describe('environment engine host', () =>
     {
         await HostFx.Run(async fx =>
         {
-            fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
+            await fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
             const host = fx.Host()
             const engine = await host.Engine()
             const version = engine.SchemaVersion
@@ -350,7 +350,7 @@ describe('environment engine host', () =>
     {
         await HostFx.Run(async fx =>
         {
-            fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
+            await fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
             const host = fx.Host()
             let changes = 0
             host.Changed.Subscribe(() => { changes++ })
@@ -376,7 +376,7 @@ describe('environment engine host', () =>
     {
         await HostFx.Run(async fx =>
         {
-            fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
+            await fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
             const diagnostics = new RecordingDiagnostics()
             const host = fx.Track(new FailingOpenHost(fx.Deliveries(), new NodeFsStorage(fx.PackagesDir), fx.Services(), { Kind: StorageKind.Lmdb, Path: fx.StorePath }, diagnostics))
             let changes = 0
@@ -398,7 +398,7 @@ describe('environment engine host', () =>
     {
         await HostFx.Run(async fx =>
         {
-            fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
+            await fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
             const diagnostics = new RecordingDiagnostics()
             const packages = new FlakyStorage(new NodeFsStorage(fx.PackagesDir))
             const host = fx.Host(diagnostics, undefined, packages)
@@ -407,7 +407,7 @@ describe('environment engine host', () =>
             const persisted = HostFx.Persisted
             await assert.rejects(host.Deliver(change, async () =>
             {
-                fx.Live(HostFx.NotesApp, HostFx.AppVersion, [HostFx.Notes])
+                await fx.Live(HostFx.NotesApp, HostFx.AppVersion, [HostFx.Notes])
                 // validated already; the redelivery after the persist cannot read the packages
                 packages.Failing = true
                 return persisted
@@ -423,9 +423,9 @@ describe('environment engine host', () =>
     {
         await HostFx.Run(async fx =>
         {
-            fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
+            await fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
             const provisioning = new InMemoryEnvironmentProvisioning(new Map([[EnvironmentFixture.EnvironmentId, { displayName: EnvironmentFixture.EnvironmentId, purpose: EnvironmentPurpose.Runtime }]]))
-            const registry = new EnvironmentRegistry(fx.Root, fx.MasterKey(), provisioning, new InMemoryEnvironmentCoordinator())
+            const registry = new EnvironmentRegistry(fx.Root, fx.MasterKey(), provisioning, new InMemoryEnvironmentCoordinator(), fx.Platform)
             try
             {
                 const server = await registry.ServerFor(EnvironmentFixture.EnvironmentId)
@@ -449,7 +449,7 @@ describe('environment engine host', () =>
     {
         await HostFx.Run(async fx =>
         {
-            fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
+            await fx.Live(HostFx.CrmApp, HostFx.AppVersion, [HostFx.Crm])
             const before = fx.Host()
             const commit = await fx.Seed([{ Concept: HostFx.Account, Id: HostFx.AccountId, Properties: { name: HostFx.Acme } }], before)
             await before.dispose()
@@ -486,7 +486,7 @@ describe('environment engine host', () =>
         const adapter = new HangingSourceAdapter()
         await HostFx.Run(async fx =>
         {
-            fx.Live(HostFx.ExtApp, HostFx.AppVersion, [HostFx.Ext])
+            await fx.Live(HostFx.ExtApp, HostFx.AppVersion, [HostFx.Ext])
             const diagnostics = new RecordingDiagnostics()
             const host = fx.Host(diagnostics, { PrepareTimeoutMs: 200 })
             const engine = await host.Engine()

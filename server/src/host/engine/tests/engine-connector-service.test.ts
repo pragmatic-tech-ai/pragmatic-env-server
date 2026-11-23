@@ -110,8 +110,8 @@ class ConnectorFx
         {
             await fx.Package(ConnectorFx.Crm.id, ConnectorFx.Crm.version, ConnectorFx.CrmTodl)
             await fx.Package(ConnectorFx.Ext.id, ConnectorFx.Ext.version, ConnectorFx.ExtTodl)
-            fx.Live(ConnectorFx.CrmApp, ConnectorFx.AppVersion, [ConnectorFx.Crm])
-            fx.Live(ConnectorFx.ExtApp, ConnectorFx.AppVersion, [ConnectorFx.Ext])
+            await fx.Live(ConnectorFx.CrmApp, ConnectorFx.AppVersion, [ConnectorFx.Crm])
+            await fx.Live(ConnectorFx.ExtApp, ConnectorFx.AppVersion, [ConnectorFx.Ext])
             fx.Source.Adapter.Seed(ConnectorFx.CustomerSource, [
                 { [ConnectorFx.CustomerKey]: 'k1', [ConnectorFx.NameField]: ConnectorFx.Acme, [ConnectorFx.AmountField]: '50', [ConnectorFx.ScoreField]: '1.5' },
                 { [ConnectorFx.CustomerKey]: 'k2', [ConnectorFx.NameField]: ConnectorFx.Bolt, [ConnectorFx.AmountField]: '150', [ConnectorFx.ScoreField]: '2.5' },

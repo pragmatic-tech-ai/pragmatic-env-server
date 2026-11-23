@@ -9,6 +9,7 @@ import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role, ResourceRef, ResourceKind, ResourceAuthorizationPolicy } from '@pragmatic-tech-ai/pragmatic-identity'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class PagingGuardFixture
 {
@@ -40,7 +41,7 @@ class PagingGuardFixture
         const packages = mkdtempSync(join(tmpdir(), PagingGuardFixture.PackagesPrefix))
         cpSync(join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
         writeFileSync(join(solution, PagingGuardFixture.ModelFile), PagingGuardFixture.ModelTodl)
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         await server.OpenSolution(solution)
         const language = await server.LanguageService() as SolutionLanguageService

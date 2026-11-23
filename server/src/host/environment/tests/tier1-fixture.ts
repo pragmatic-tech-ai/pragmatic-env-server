@@ -159,7 +159,7 @@ export class Tier1Fx
             {
                 await fx.Package(ref.id, ref.version, todl)
             }
-            fx.Live(Tier1Fx.AppName, Tier1Fx.AppVersion, [Tier1Fx.Hr, Tier1Fx.Projects, Tier1Fx.Crm, Tier1Fx.Ext])
+            await fx.Live(Tier1Fx.AppName, Tier1Fx.AppVersion, [Tier1Fx.Hr, Tier1Fx.Projects, Tier1Fx.Crm, Tier1Fx.Ext])
             fx.Source.Adapter.Seed(Tier1Fx.CustomerSource, [{ [Tier1Fx.CustomerKey]: Tier1Fx.CustomerRow, [Tier1Fx.NameField]: Tier1Fx.Acme }])
             const server = await fx.Start(options)
             await body(fx, server)

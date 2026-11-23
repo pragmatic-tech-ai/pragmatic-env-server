@@ -18,6 +18,7 @@ import { NullLogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { DataChangedPush, LoggerDataChangedDiagnostics } from '../data-changed-push.js'
 import { EnvironmentEngineHost, type EnvironmentSnapshot } from '../environment-engine-host.js'
 import { EnvironmentFixture, type IEnvironmentFixtureOptions } from './environment-fixture.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
 
 /** Runs each started work only when `Fire` is called. */
 class ManualTimer implements IUpgradeTimer
@@ -199,8 +200,8 @@ class PushFx
         {
             await fx.Package(PushFx.Crm.id, PushFx.Crm.version, PushFx.CrmTodl)
             await fx.Package(PushFx.Ext.id, PushFx.Ext.version, PushFx.ExtTodl)
-            fx.Live(PushFx.App, PushFx.AppVersion, [PushFx.Crm])
-            if (external) fx.Live(PushFx.ExtApp, PushFx.AppVersion, [PushFx.Ext])
+            await fx.Live(PushFx.App, PushFx.AppVersion, [PushFx.Crm])
+            if (external) await fx.Live(PushFx.ExtApp, PushFx.AppVersion, [PushFx.Ext])
             await fx.Start(options)
             await body(fx)
         }
@@ -253,7 +254,7 @@ describe('data/changed push', () =>
             assert.deepEqual(await inbox.Await(), [{ commit, concepts: [PushFx.Account] }])
             // an in-place upgrade (same connector set, a new package version) is an Upgrade commit: the root
             await fx.Package(PushFx.CrmNext.id, PushFx.CrmNext.version, PushFx.CrmNextTodl)
-            fx.Live(PushFx.App, PushFx.NextVersion, [PushFx.CrmNext])
+            await fx.Live(PushFx.App, PushFx.NextVersion, [PushFx.CrmNext])
             await fx.Server.EnvironmentEngine().Redeliver()
             const upgraded = await inbox.Await(2)
             assert.deepEqual(upgraded[1], { commit: await PushFx.Commit(fx), concepts: [TodlNames.Element] })
@@ -482,7 +483,7 @@ describe('data/changed push', () =>
                 assert.deepEqual(inbox.Payloads, [], 'skipped for the window')
                 host.Reopening = false
                 // a new external connector set reopens the engine
-                fx.Live(PushFx.ExtApp, PushFx.AppVersion, [PushFx.Ext])
+                await fx.Live(PushFx.ExtApp, PushFx.AppVersion, [PushFx.Ext])
                 await host.Redeliver()
                 const reopened = await host.Engine()
                 assert.notEqual(reopened, first, 'the engine was reopened')
@@ -508,7 +509,7 @@ describe('data/changed push', () =>
             const inbox = new Inbox(await PushFx.Connect(fx))
             const first = await host.Engine()
             // a new external connector set reopens the engine (R25: the old one is disposed first)
-            fx.Live(PushFx.ExtApp, PushFx.AppVersion, [PushFx.Ext])
+            await fx.Live(PushFx.ExtApp, PushFx.AppVersion, [PushFx.Ext])
             await host.Redeliver()
             assert.notEqual(await host.Engine(), first, 'the engine was reopened')
             await PushFx.Applied(fx, [{ op: AppWriteOpKind.Create, concept: PushFx.Account, fields: { [PushFx.Name]: PushFx.A } }])
@@ -522,7 +523,7 @@ describe('data/changed push', () =>
     test('dev environments get no data/changed', async () =>
     {
         const packages = mkdtempSync(join(tmpdir(), PushFx.DevPrefix))
-        const server = new PragmaticServer({ purpose: EnvironmentPurpose.Development, packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, purpose: EnvironmentPurpose.Development, packagesRoot: packages })
         try
         {
             assert.equal(ServerConnectionHandler.RuntimeAttachArgs(server, server.Purpose()).dataChanges, undefined)

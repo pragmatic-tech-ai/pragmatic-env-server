@@ -1,0 +1,28 @@
+{
+  "accounts": [
+    {
+      "principalId": "ann",
+      "realmId": "acme-dev",
+      "email": "ann@acme.io",
+      "secretRef": "ann-pw",
+      "disabled": false
+    },
+    {
+      "principalId": "gone",
+      "realmId": "acme-dev",
+      "email": "gone@acme.io",
+      "secretRef": "gone-pw",
+      "disabled": true
+    }
+  ],
+  "groups": [
+    {
+      "groupId": "eng",
+      "realmId": "acme-dev",
+      "name": "Engineering",
+      "memberIds": [
+        "ann"
+      ]
+    }
+  ]
+}

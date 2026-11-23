@@ -1,8 +1,9 @@
 import type { ISqlSession } from '@pragmatic-tech-ai/todl'
-import { PgSession, SqlRecordStore, SqlSecretKeyRing, SqlSecretStore } from '@pragmatic-tech-ai/pragmatic-realm-adapters'
+import { PgSession, SqlOidcFlowStateStore, SqlRecordStore, SqlSecretKeyRing, SqlSecretStore } from '@pragmatic-tech-ai/pragmatic-realm-adapters'
 import { PostgresPoolFactory } from '@pragmatic-tech-ai/pragmatic-realm-custom'
 import { EnvServerDatabaseMissingError } from './env-server-database-missing-error.js'
 import type { EnvServerRegistry } from './env-server-registry.js'
+import { SqlAccessAuditRecords } from './sql-access-audit-records.js'
 
 /**
  * The env server's own Postgres database (A5): one per deployment, shared by every environment the process hosts (rows
@@ -27,6 +28,9 @@ export class EnvServerDatabase
     private static readonly NoParams: readonly unknown[] = []
 
     private readonly records = new Map<EnvServerRegistry, Promise<SqlRecordStore<{ id: string }>>>()
+    private secretsMigrated: Promise<void> | undefined
+    private flowStates: Promise<SqlOidcFlowStateStore> | undefined
+    private accessAudit: Promise<SqlAccessAuditRecords> | undefined
 
     private constructor(public readonly Session: ISqlSession, private readonly owned: PgSession | undefined)
     {
@@ -86,10 +90,56 @@ export class EnvServerDatabase
         return store as unknown as Promise<SqlRecordStore<T>>
     }
 
-    /** An environment's sealed secrets (AES-256-GCM under the master key, scope `env-server/<environmentId>`). */
-    public Secrets(environmentId: string, masterKey: Buffer): Promise<SqlSecretStore>
+    /** The deployment's pending OIDC sign-ins (every environment and worker shares them; EnvironmentFlowStateStore
+     *  views them per environment), opened once; a failed open is retried by the next call. */
+    public FlowStates(): Promise<SqlOidcFlowStateStore>
     {
-        return SqlSecretStore.Open(this.Session, SqlSecretKeyRing.Single(EnvServerDatabase.SecretKeyId, masterKey), EnvServerDatabase.SecretScopePrefix + environmentId)
+        if (this.flowStates === undefined)
+        {
+            const opening = SqlOidcFlowStateStore.Open(this.Session)
+            opening.catch(() =>
+            {
+                if (this.flowStates === opening) this.flowStates = undefined
+            })
+            this.flowStates = opening
+        }
+        return this.flowStates
+    }
+
+    /** The access audit table (append-only, apart from the identity audit), opened once; a failed open is retried. */
+    public AccessAudit(): Promise<SqlAccessAuditRecords>
+    {
+        if (this.accessAudit === undefined)
+        {
+            const opening = SqlAccessAuditRecords.Open(this.Session)
+            opening.catch(() =>
+            {
+                if (this.accessAudit === opening) this.accessAudit = undefined
+            })
+            this.accessAudit = opening
+        }
+        return this.accessAudit
+    }
+
+    /** An environment's sealed secrets (AES-256-GCM under the master key, scope `env-server/<environmentId>`). */
+    public async Secrets(environmentId: string, masterKey: Buffer): Promise<SqlSecretStore>
+    {
+        const open = (): Promise<SqlSecretStore> => SqlSecretStore.Open(this.Session, SqlSecretKeyRing.Single(EnvServerDatabase.SecretKeyId, masterKey), EnvServerDatabase.SecretScopePrefix + environmentId)
+        if (this.secretsMigrated === undefined)
+        {
+            // The first open runs the secrets migration; later opens wait for it, so environments opening together never
+            // race on the schema (the advisory lock serializes them on Postgres, and pg-mem has none).
+            const first = open()
+            const migrated = first.then(() => undefined)
+            migrated.catch(() =>
+            {
+                if (this.secretsMigrated === migrated) this.secretsMigrated = undefined
+            })
+            this.secretsMigrated = migrated
+            return first
+        }
+        await this.secretsMigrated
+        return open()
     }
 
     /** Ends the pool when this database opened it. */

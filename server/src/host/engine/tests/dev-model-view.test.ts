@@ -17,6 +17,7 @@ import { ServerConnectionHandler } from '../../server-connection-handler.js'
 import { DevModelView, type IDevModelResource, type IDevModelStructure, type IDevModelViewDiagnostics } from '../dev-model-view.js'
 import type { IGraphModelView } from '../graph-model-view.js'
 import type { IGraphScope, IGraphScopeSource } from '../access-scope-source.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
 
 /**
  * Ported from host/tests/model-read-filter.test.ts, model-view-paging.test.ts and model-surface.test.ts: the dev
@@ -205,7 +206,7 @@ class DevWorld
             cpSync(join(import.meta.dirname, '..', '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
             writeFileSync(join(solution, DevWorld.ModelsDir, DevWorld.ModelFileName), modelTodl!)
         }
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         let world: DevWorld | undefined
         try
         {

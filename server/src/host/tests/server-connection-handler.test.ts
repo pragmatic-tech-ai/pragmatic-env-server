@@ -8,6 +8,7 @@ import type { SolutionLanguageService } from '@pragmatic-tech-ai/todl/solution-s
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role, ResourceRef, ResourceKind, ResourceAuthorizationPolicy } from '@pragmatic-tech-ai/pragmatic-identity'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class ContextFixture
 {
@@ -47,7 +48,7 @@ test('a client opens a solution and reads diagnostics over the handler', async (
 {
     const packages = HandlerFixture.PackagesDir()
     const solution = HandlerFixture.SolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()
@@ -76,7 +77,7 @@ test('a client opens a solution and reads diagnostics over the handler', async (
 test('disposing the handler stops graph-change pushes', async () =>
 {
     const packages = HandlerFixture.PackagesDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()
@@ -97,7 +98,7 @@ test('disposing the handler stops graph-change pushes', async () =>
 test('an unknown method rejects', async () =>
 {
     const packages = HandlerFixture.PackagesDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()

@@ -24,6 +24,7 @@ import type { DevSnapshot } from '../dev-snapshot-source.js'
 import type { IDevWriteDiagnostics, IWriteFence } from '../server-model-workspace.js'
 import { DevScopeFx } from './dev-scope-fixture.js'
 import { FakeLanguageService, FakeSolution, ManualGate, ManualTimer, MemoryStorage } from './engine-host-fixture.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
 
 // ── ported from host/tests/cypher-execute.test.ts (the legacy writer -> the dev engine) ──────────────
 
@@ -135,7 +136,6 @@ class ExecFixture
     public static readonly SchemaFileName = 'schema.todl'
     private static readonly SolutionPrefix = 'cex-sol-'
     private static readonly PackagesPrefix = 'cex-pkgs-'
-    private static readonly IdentityPrefix = 'cex-id-'
     private static readonly ModelFile = join('models', 'model.todl')
     private static readonly SchemaFile = 'schema.todl'
     private static readonly BaseDir = 'base'
@@ -206,7 +206,6 @@ class ExecFixture
     {
         const solution = mkdtempSync(join(tmpdir(), ExecFixture.SolutionPrefix))
         const packages = mkdtempSync(join(tmpdir(), ExecFixture.PackagesPrefix))
-        const identityRoot = mkdtempSync(join(tmpdir(), ExecFixture.IdentityPrefix))
         cpSync(join(import.meta.dirname, '..', '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
         const modelFile = join(solution, ExecFixture.ModelFile)
         writeFileSync(modelFile, coLocated ? ExecFixture.CoLocatedTodl() : ExecFixture.ModelTodl())
@@ -216,8 +215,8 @@ class ExecFixture
         }
         PpSecurityHarness.SetKey()
         const server = identityOn
-            ? new PragmaticServer({ packagesRoot: packages, identity: PpSecurityHarness.Identity(identityRoot) })
-            : new PragmaticServer({ packagesRoot: packages })
+            ? new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages, identity: PpSecurityHarness.Identity() })
+            : new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         await server.OpenSolution(solution)
         const language = await server.LanguageService() as SolutionLanguageService
@@ -236,7 +235,6 @@ class ExecFixture
             PpSecurityHarness.ClearKey()
             rmSync(solution, { recursive: true, force: true })
             rmSync(packages, { recursive: true, force: true })
-            rmSync(identityRoot, { recursive: true, force: true })
         }
     }
 

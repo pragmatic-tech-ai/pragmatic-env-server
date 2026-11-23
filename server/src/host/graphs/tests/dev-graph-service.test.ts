@@ -2,7 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { IStorage, StorageEntry } from '@pragmatic-tech-ai/todl-runtime'
 import type { ContributedPackageDto, GraphRefParamsDto, GraphSummaryDto } from '@pragmatic-tech-ai/pragmatic-protocol'
-import { DevGraphStore } from '../dev-graph-store.js'
+import { DevGraphStore, type DevGraphRow } from '../dev-graph-store.js'
+import type { EnvServerDatabase } from '../../../storage/env-server-database.js'
+import { EnvServerRegistry } from '../../../storage/env-server-registry.js'
+import { EnvironmentRecords } from '../../../storage/environment-records.js'
+import { EnvServerTestDatabase } from '../../../storage/tests/env-server-test-database.js'
 import { GraphPackageIngest } from '../graph-package-ingest.js'
 import { GraphPackageReader } from '../graph-package-reader.js'
 import { DevGraphService, GraphExistsError, GraphNameInvalidError, GraphNotFoundError } from '../dev-graph-service.js'
@@ -35,15 +39,18 @@ class MemoryStorage implements IStorage
 class Fixture
 {
     private static readonly GraphName = 'g1'
+    private static readonly Environment = 'dev-1'
 
     public static Service(): DevGraphService
     {
-        return Fixture.ServiceOver(new MemoryStorage(), new MemoryStorage())
+        return Fixture.ServiceOver(EnvServerTestDatabase.Mem(), new MemoryStorage())
     }
 
-    public static ServiceOver(graphs: MemoryStorage, packages: MemoryStorage): DevGraphService
+    /** A service over the dev graph records of `graphs` (a fresh service over the same database is a restart). */
+    public static ServiceOver(graphs: EnvServerDatabase, packages: MemoryStorage): DevGraphService
     {
-        return new DevGraphService(new DevGraphStore(graphs), new GraphPackageIngest(packages), new GraphPackageReader(packages))
+        const rows = new EnvironmentRecords<DevGraphRow>(graphs, EnvServerRegistry.DevGraphs, Fixture.Environment)
+        return new DevGraphService(new DevGraphStore(rows), new GraphPackageIngest(packages), new GraphPackageReader(packages))
     }
 
     public static Pkg(id: string, version: string, modelJson: string = '{}'): ContributedPackageDto
@@ -110,7 +117,7 @@ test('contributing to a missing graph rejects GraphNotFoundError', async () =>
 
 test('a first contribution appears in the returned detail and in a fresh GetGraph', async () =>
 {
-    const graphs = new MemoryStorage()
+    const graphs = EnvServerTestDatabase.Mem()
     const packages = new MemoryStorage()
     const service = Fixture.ServiceOver(graphs, packages)
     await Fixture.Create(service, 'd')
@@ -153,7 +160,7 @@ test('two solutions contributing identical id@version yield one union entry and 
 
 test('re-contributing differing bytes for an existing id@version overwrites it (dev last-writer-wins) and updates the slice', async () =>
 {
-    const graphs = new MemoryStorage()
+    const graphs = EnvServerTestDatabase.Mem()
     const packages = new MemoryStorage()
     const service = Fixture.ServiceOver(graphs, packages)
     await Fixture.Create(service, 'd')

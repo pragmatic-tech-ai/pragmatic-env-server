@@ -36,7 +36,7 @@ export interface IDeliveryGate
 
 /**
  * The package sets a runtime environment holds (ruling S3): one Deploy delivery per app with a `live` pointer (name =
- * the app name, packages = that version's `application.json` packages) plus, when the promote record exists, one
+ * the app name, packages = that version's manifest packages) plus, when the promote record exists, one
  * Promote delivery (name = the record's `name`, packages = its `packages`). Sorted Deploy before Promote, then by name.
  * Read from storage on every call: the persisted pointers and the record are the only state.
  */

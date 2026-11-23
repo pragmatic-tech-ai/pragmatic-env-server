@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs'
-import { type ServerConfig, ServerConfigLoader, type IAccessAuditSink, DeploymentMode, DeploymentProvider, Observability, ObservabilityRole, HostBootstrap } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { ServerConfigLoader, type IAccessAuditSink, Observability, ObservabilityRole, HostBootstrap } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { EnvironmentProvisioningFactory } from '../config/environment-provisioning-factory.js'
 import { ProvisionedSecretsFactory } from '../config/provisioned-secrets-factory.js'
 import { PragmaticServerHost } from '../host/pragmatic-server-host.js'
 import { ServerBootstrap } from './server-bootstrap.js'
 import { GracefulShutdown } from './graceful-shutdown.js'
 import { StructuredLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
-import type { ICloudBundle } from '../platform/cloud-bundle.js'
+import { PlatformBundleFactory, type IPlatformBundle } from '../platform/platform-bundle.js'
+import { EnvServerStartImport } from './env-server-start-import.js'
 
 class ServerMain
 {
@@ -24,7 +25,7 @@ class ServerMain
 
     private readonly shutdown: GracefulShutdown
 
-    private constructor(host: PragmaticServerHost, audit: IAccessAuditSink, logger: ILogger, bundle?: ICloudBundle)
+    private constructor(host: PragmaticServerHost, audit: IAccessAuditSink, logger: ILogger, bundle: IPlatformBundle)
     {
         this.shutdown = new GracefulShutdown(host, audit, bundle, logger, ServerMain.ShutdownLine, ServerMain.ShutdownErrorPrefix)
     }
@@ -38,13 +39,14 @@ class ServerMain
         const provisionedSecrets = ProvisionedSecretsFactory.Build(config, read)
         const observabilityOptions = HostBootstrap.ObservabilityOptions(config, ObservabilityRole.Host)
         const observability = observabilityOptions !== undefined ? Observability.Start(observabilityOptions) : undefined
-        const bundle = config.deploymentMode === DeploymentMode.Cloud ? await ServerMain.BuildBundle(config) : undefined
+        const bundle = await PlatformBundleFactory.Create(config, process.env)
         let main: ServerMain
         try
         {
-            const audit = HostBootstrap.AuditSink(config, logger, observability, bundle !== undefined ? await bundle.Platform.AuditSink() : undefined)
+            await EnvServerStartImport.Run(config, bundle.Platform, logger)
+            const audit = await ServerBootstrap.AuditSink(config, logger, observability, bundle.Platform)
             const rateLimit = HostBootstrap.RateLimit(config, audit, observability, logger)
-            const options = ServerBootstrap.ComposeOptions(config, provisioning, bundle?.Platform, provisionedSecrets, logger, observability, audit, rateLimit)
+            const options = ServerBootstrap.ComposeOptions(config, provisioning, bundle.Platform, provisionedSecrets, logger, observability, audit, rateLimit)
             const host = await PragmaticServerHost.StartAsync(options)
             logger.Info(ServerBootstrap.StartupLine(config, environmentCount), { [ServerMain.EventKey]: ServerMain.StartupEvent })
             main = new ServerMain(host, audit, logger, bundle)
@@ -64,28 +66,8 @@ class ServerMain
         process.exit(1)
     }
 
-    private static async BuildBundle(config: ServerConfig): Promise<ICloudBundle>
+    private static async DisposeQuietly(bundle: IPlatformBundle): Promise<void>
     {
-        if (config.cloudProvider === DeploymentProvider.Azure)
-        {
-            const { AzurePlatformFactory } = await import('../platform/azure-platform-factory.js')
-            return await AzurePlatformFactory.Create(config)
-        }
-        if (config.cloudProvider === DeploymentProvider.Aws)
-        {
-            const { AwsPlatformFactory } = await import('../platform/aws-platform-factory.js')
-            return await AwsPlatformFactory.Create(config)
-        }
-        const { GcpPlatformFactory } = await import('../platform/gcp-platform-factory.js')
-        return await GcpPlatformFactory.Create(config)
-    }
-
-    private static async DisposeQuietly(bundle: ICloudBundle | undefined): Promise<void>
-    {
-        if (bundle === undefined)
-        {
-            return
-        }
         try
         {
             await bundle.Dispose()

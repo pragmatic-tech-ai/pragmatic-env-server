@@ -1,4 +1,4 @@
-import { DeploymentMode, type ServerConfig, type Observability, PagingLimits, type IAccessAuditSink, type RateLimitGuard, HostBootstrap } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { DeploymentMode, type ServerConfig, type Observability, PagingLimits, type IAccessAuditSink, type RateLimitGuard, HostBootstrap, AuditSinkKind, NullAccessAuditSink } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import type { PlatformServices } from '../platform/platform-services.js'
 import type { IEnvironmentProvisioning } from '../environments/environment-provisioning.js'
 import type { PragmaticServerHostOptions } from '../host/pragmatic-server-host.js'
@@ -6,6 +6,7 @@ import type { WorkerHostOptions } from '../cluster/worker-host.js'
 import type { IProvisionedSecretSource } from '../config/provisioned-secret-source.js'
 import type { ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { CypherLimits } from '../config/cypher-limits.js'
+import { AuditSinkRetiredError } from './audit-sink-retired-error.js'
 
 /**
  * The environment server's and its workers' host options and startup lines from their configuration; what they share with
@@ -13,10 +14,11 @@ import { CypherLimits } from '../config/cypher-limits.js'
  */
 export class ServerBootstrap
 {
-    private static readonly CloudNeedsPlatform = 'cloud deployment requires a configured platform (deferred backends)'
     private static readonly RedisOwnership = 'redis'
     private static readonly InMemoryOwnership = 'in-memory'
     private static readonly OidcFlowToken = ' oidc-flow='
+    /** OIDC flow state lives in the env server's database for every mode (shared by all workers). */
+    private static readonly OidcFlowSql = 'sql'
     private static readonly SecretsFile = 'file'
     private static readonly SecretsNone = 'none'
     private static readonly HealthOff = 'off'
@@ -25,12 +27,8 @@ export class ServerBootstrap
     private static readonly AuditAnchorOff = 'off'
     private static readonly WorkerNeedsTls = 'worker requires TLS (set PRAGMATIC_TLS_CERT_FILE/KEY_FILE/CA_FILE)'
 
-    public static ComposeOptions(config: ServerConfig, provisioning: IEnvironmentProvisioning, platform?: PlatformServices, provisionedSecrets?: IProvisionedSecretSource, logger?: ILogger, observability?: Observability, audit?: IAccessAuditSink, rateLimit?: RateLimitGuard): PragmaticServerHostOptions
+    public static ComposeOptions(config: ServerConfig, provisioning: IEnvironmentProvisioning, platform: PlatformServices, provisionedSecrets?: IProvisionedSecretSource, logger?: ILogger, observability?: Observability, audit?: IAccessAuditSink, rateLimit?: RateLimitGuard): PragmaticServerHostOptions
     {
-        if (config.deploymentMode === DeploymentMode.Cloud && platform === undefined)
-        {
-            throw new Error(ServerBootstrap.CloudNeedsPlatform)
-        }
         return {
             host: config.host,
             port: config.port,
@@ -57,6 +55,29 @@ export class ServerBootstrap
         }
     }
 
+    /**
+     * The access audit sink: sql (the default) writes rows to the platform's identity audit store (realm = environment
+     * id), none drops them; the retired file sink is refused (AuditSinkRetiredError).
+     */
+    public static async AuditSink(config: ServerConfig, logger: ILogger, observability: Observability | undefined, platform: PlatformServices): Promise<IAccessAuditSink>
+    {
+        if (config.auditSink === AuditSinkKind.File)
+        {
+            throw new AuditSinkRetiredError()
+        }
+        if (config.auditSink === AuditSinkKind.None)
+        {
+            return new NullAccessAuditSink()
+        }
+        return HostBootstrap.AuditSink({ auditSink: AuditSinkKind.Sql }, logger, observability, await platform.AuditSink())
+    }
+
+    /** The configuration with the env server's audit default (sql) filled in, for the startup line. */
+    private static WithAuditDefault(config: ServerConfig): ServerConfig
+    {
+        return { ...config, auditSink: config.auditSink ?? AuditSinkKind.Sql }
+    }
+
     private static CypherLimitsOf(config: ServerConfig): CypherLimits
     {
         return new CypherLimits(config.cypherRowCap, config.cypherTimeoutMs, config.cypherMaxVarLength)
@@ -71,18 +92,14 @@ export class ServerBootstrap
     {
         const ownership = ServerBootstrap.HasRedis(config) ? ServerBootstrap.RedisOwnership : ServerBootstrap.InMemoryOwnership
         const secrets = config.provisionedSecretsFile !== undefined && config.provisionedSecretsFile.length > 0 ? ServerBootstrap.SecretsFile : ServerBootstrap.SecretsNone
-        return `pragmatic-server listening on ${config.host}:${config.port} mode=${config.deploymentMode} environments=${environmentCount} ownership=${ownership} secrets=${secrets}${HostBootstrap.ClientMtlsToken(config.clientTls)}${ServerBootstrap.OidcFlowToken}${ownership}${HostBootstrap.OtelToken(config)}${HostBootstrap.SecurityTokens(config)}${HostBootstrap.DrainToken(config)}${ServerBootstrap.AuditAnchor(config)}`
+        return `pragmatic-server listening on ${config.host}:${config.port} mode=${config.deploymentMode} environments=${environmentCount} ownership=${ownership} secrets=${secrets}${HostBootstrap.ClientMtlsToken(config.clientTls)}${ServerBootstrap.OidcFlowToken}${ServerBootstrap.OidcFlowSql}${HostBootstrap.OtelToken(config)}${HostBootstrap.SecurityTokens(ServerBootstrap.WithAuditDefault(config))}${HostBootstrap.DrainToken(config)}${ServerBootstrap.AuditAnchor(config)}`
     }
 
-    public static ComposeWorkerOptions(config: ServerConfig, provisioning: IEnvironmentProvisioning, platform?: PlatformServices, provisionedSecrets?: IProvisionedSecretSource, logger?: ILogger, observability?: Observability, audit?: IAccessAuditSink, rateLimit?: RateLimitGuard): WorkerHostOptions
+    public static ComposeWorkerOptions(config: ServerConfig, provisioning: IEnvironmentProvisioning, platform: PlatformServices, provisionedSecrets?: IProvisionedSecretSource, logger?: ILogger, observability?: Observability, audit?: IAccessAuditSink, rateLimit?: RateLimitGuard): WorkerHostOptions
     {
         if (config.tls === undefined)
         {
             throw new Error(ServerBootstrap.WorkerNeedsTls)
-        }
-        if (config.deploymentMode === DeploymentMode.Cloud && platform === undefined)
-        {
-            throw new Error(ServerBootstrap.CloudNeedsPlatform)
         }
         const advertise = config.workerAdvertiseHost !== undefined && config.workerAdvertisePort !== undefined
             ? { host: config.workerAdvertiseHost, port: config.workerAdvertisePort }
@@ -118,7 +135,7 @@ export class ServerBootstrap
     public static WorkerStartupLine(config: ServerConfig): string
     {
         const ownership = ServerBootstrap.HasRedis(config) ? ServerBootstrap.RedisOwnership : ServerBootstrap.InMemoryOwnership
-        return `pragmatic-worker listening on ${config.host}:${config.port} mode=${config.deploymentMode} ownership=${ownership} health=${config.healthPort ?? ServerBootstrap.HealthOff}${HostBootstrap.OtelToken(config)}${HostBootstrap.SecurityTokens(config)}${HostBootstrap.DrainToken(config)}`
+        return `pragmatic-worker listening on ${config.host}:${config.port} mode=${config.deploymentMode} ownership=${ownership} health=${config.healthPort ?? ServerBootstrap.HealthOff}${HostBootstrap.OtelToken(config)}${HostBootstrap.SecurityTokens(ServerBootstrap.WithAuditDefault(config))}${HostBootstrap.DrainToken(config)}`
     }
 
     private static AuditAnchor(config: { deploymentMode?: DeploymentMode; cloudAuditAnchorKeyRef?: string }): string

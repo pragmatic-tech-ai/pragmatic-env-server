@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { EnvironmentPurpose } from '../environments/environment-purpose.js'
 import { PragmaticServer } from '../pragmatic-server.js'
 import type { PragmaticServerOptions } from '../pragmatic-server.js'
+import { CustomPlatformFixture } from '../platform/tests/custom-platform-fixture.js'
 
 class CoHostedFx
 {
@@ -17,7 +18,6 @@ class CoHostedFx
     private static readonly Packages = 'packages'
     private static readonly Applications = 'applications'
     private static readonly Graphs = 'graphs'
-    private static readonly Identity = 'identity'
 
     public readonly Root = mkdtempSync(join(tmpdir(), CoHostedFx.RootPrefix))
     private readonly servers: PragmaticServer[] = []
@@ -27,14 +27,15 @@ class CoHostedFx
     {
         process.env[CoHostedFx.KeyEnv] = randomBytes(32).toString('base64')
         const options: PragmaticServerOptions = {
+            platform: CustomPlatformFixture.Mem(),
             purpose,
             runtimeCoHosted,
             packagesRoot: join(this.Root, CoHostedFx.Packages),
             applicationsRoot: join(this.Root, CoHostedFx.Applications),
             graphsRoot: join(this.Root, CoHostedFx.Graphs),
-            ...(withIdentity ? { identity: { identityRoot: join(this.Root, CoHostedFx.Identity), masterKey: { base64Env: CoHostedFx.KeyEnv }, environment: { id: CoHostedFx.EnvironmentId, displayName: CoHostedFx.DisplayName }, directorySyncOnStart: false } } : {}),
+            ...(withIdentity ? { identity: { masterKey: { base64Env: CoHostedFx.KeyEnv }, environment: { id: CoHostedFx.EnvironmentId, displayName: CoHostedFx.DisplayName }, directorySyncOnStart: false } } : {}),
         }
-        for (const dir of [CoHostedFx.Packages, CoHostedFx.Applications, CoHostedFx.Graphs, CoHostedFx.Identity]) mkdirSync(join(this.Root, dir), { recursive: true })
+        for (const dir of [CoHostedFx.Packages, CoHostedFx.Applications, CoHostedFx.Graphs]) mkdirSync(join(this.Root, dir), { recursive: true })
         const server = new PragmaticServer(options)
         this.servers.push(server)
         await server.Start()

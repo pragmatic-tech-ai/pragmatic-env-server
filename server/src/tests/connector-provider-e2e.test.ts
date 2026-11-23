@@ -13,6 +13,7 @@ import { NpmAdapterPackProvider, NpmCli, WorkerThreadSandboxFactory } from '@pra
 import type { INpmCli } from '@pragmatic-tech-ai/pragmatic-connectors-host'
 import { PragmaticServer } from '../pragmatic-server.js'
 import { DevConnectorRead } from '../host/engine/tests/dev-connector-read.js'
+import { CustomPlatformFixture } from '../platform/tests/custom-platform-fixture.js'
 
 /** Opt-in gate for the real-npm / fake-registry e2e (mirrors TCH's PACK_INSTALLER_IT). */
 class Gate
@@ -265,7 +266,7 @@ test('a provider-declared connector resolves through the composed server and the
             allowProviderOverride: true,
             providerAllowlist: [PackE2E.PackName],
         })
-        server = new PragmaticServer({ packagesRoot: join(work, PackE2E.PackagesDirName), connectors: { provider } })
+        server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: join(work, PackE2E.PackagesDirName), connectors: { provider } })
         await PackE2E.AssertSeededRows(server, solution)
         assert.equal(npm.Installs, 1)
     }
@@ -308,7 +309,7 @@ test('a provider-declared connector installs from a fake registry with real npm 
             allowProviderOverride: true,
             providerAllowlist: [PackE2E.PackName],
         })
-        server = new PragmaticServer({ packagesRoot: join(work, PackE2E.PackagesDirName), connectors: { provider } })
+        server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: join(work, PackE2E.PackagesDirName), connectors: { provider } })
         await PackE2E.AssertSeededRows(server, solution)
         assert.ok(existsSync(join(work, PackE2E.CacheDirName)))
         assert.ok(registry.Hits > 0, PackE2E.RegistryHitMessage)

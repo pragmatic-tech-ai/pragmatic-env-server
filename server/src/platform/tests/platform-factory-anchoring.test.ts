@@ -1,4 +1,6 @@
 import { test } from 'node:test'
+import type { IAuditSink } from '@pragmatic-tech-ai/pragmatic-identity'
+import type { PlatformServices } from '../platform-services.js'
 import assert from 'node:assert/strict'
 import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/testing'
 import { AuditEvent, AuditEventKind } from '@pragmatic-tech-ai/pragmatic-identity'
@@ -7,6 +9,15 @@ import type { ICloudBackends } from '../cloud-bundle.js'
 import { GcpPlatformFactory } from '../gcp-platform-factory.js'
 import { AwsPlatformFactory } from '../aws-platform-factory.js'
 import { AzurePlatformFactory } from '../azure-platform-factory.js'
+
+/** The identity audit (hash-chained, anchored) of a platform: the access audit is a table of its own. */
+class AnchoringAudit
+{
+    public static async Of(platform: PlatformServices): Promise<IAuditSink>
+    {
+        return (await platform.CreateIdentityStores('t1', platform.ResolveMasterKey({ keyFilePath: 'unused' }))).Audit
+    }
+}
 
 class FactoryFixture
 {
@@ -32,7 +43,7 @@ for (const [name, factory] of FactoryFixture.Factories)
     {
         const backends = await FactoryFixture.Backends()
         const bundle = await factory.CreateWith(backends, 'm', 'a', 1)
-        const audit = await bundle.Platform.AuditSink()
+        const audit = await AnchoringAudit.Of(bundle.Platform)
         await audit.Record(new AuditEvent(AuditEventKind.AdminAction, 't1', 'p1', new Date('2026-01-01T00:00:00Z'), new Map([['action', 'a']])))
         const rows = await backends.Session.Query('SELECT seq FROM identity_audit_anchor WHERE realm_id = $1', ['t1'])
         assert.ok(rows.length >= 1)
@@ -42,7 +53,7 @@ for (const [name, factory] of FactoryFixture.Factories)
     {
         const backends = await FactoryFixture.Backends()
         const bundle = await factory.CreateWith(backends, 'm')
-        const audit = await bundle.Platform.AuditSink()
+        const audit = await AnchoringAudit.Of(bundle.Platform)
         await audit.Record(new AuditEvent(AuditEventKind.AdminAction, 't1', 'p1', new Date('2026-01-01T00:00:00Z'), new Map([['action', 'a']])))
         await assert.rejects(() => backends.Session.Query('SELECT * FROM identity_audit_anchor', []), /does not exist/)
     })

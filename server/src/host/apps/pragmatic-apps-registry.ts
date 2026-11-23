@@ -1,5 +1,5 @@
-import type { IStorage } from '@pragmatic-tech-ai/todl-runtime'
-import { PragmaticAppManifestParser } from './pragmatic-app-manifest.js'
+import type { EnvironmentRecords } from '../../storage/environment-records.js'
+import { PragmaticAppManifestParser, type PragmaticAppManifest } from './pragmatic-app-manifest.js'
 import { PragmaticApplication } from './pragmatic-application.js'
 
 export interface PragmaticAppSummary
@@ -8,13 +8,18 @@ export interface PragmaticAppSummary
     version: string
 }
 
-/** Lists and loads applications from an environment's `applications/` storage (`<name>/<live version>/application.json`, or the legacy `<name>/application.json`). */
+/** One application's record in the env server database (registry `env_applications`, A5): the manifest of every
+ *  ingested version and the live pointer (null: no version is live). */
+export type ApplicationRecord = { id: string; live: string | null; versions: Record<string, PragmaticAppManifest> }
+
+/**
+ * An environment's applications: manifests and live pointers from its records in the env server database, the UI blobs
+ * from its applications storage (`<name>/<version>/ui/...`). `Commit` is the deploy's one write: it adds the version's
+ * manifest and moves the live pointer to it together, so a crash before it leaves the previous live version serving and
+ * no manifest of the new one. A stored manifest is re-validated on every read (fail closed).
+ */
 export class PragmaticAppsRegistry
 {
-    private static readonly ManifestFile = 'application.json'
-    private static readonly LivePointerFile = 'live'
-    private static readonly RootPath = '.'
-    private static readonly Separator = '/'
     private static readonly SeparatorPattern = /[\\/:]/
     private static readonly ControlCharPattern = /[\u0000-\u001f\u007f]/
     private static readonly DotsOnlyPattern = /^\.+$/
@@ -24,62 +29,37 @@ export class PragmaticAppsRegistry
     private static readonly InvalidNameError = 'invalid application name: '
     private static readonly NotFoundError = 'application not found: '
 
-    private readonly storage: IStorage
-
-    public constructor(storage: IStorage)
+    public constructor(private readonly records: EnvironmentRecords<ApplicationRecord>)
     {
-        this.storage = storage
     }
 
+    /** The live applications' names and versions, by name. */
     public async List(): Promise<readonly PragmaticAppSummary[]>
     {
-        const entries = await this.storage.List(PragmaticAppsRegistry.RootPath)
-        const result: PragmaticAppSummary[] = []
-        for (const entry of entries)
-        {
-            if (!entry.IsDirectory || !await this.storage.Exists(await this.ManifestPath(entry.Name)))
-            {
-                continue
-            }
-            const app = await this.ApplicationFor(entry.Name)
-            result.push({ name: app.Manifest.name, version: app.Manifest.version })
-        }
-        return result
+        return (await this.LiveApplications()).map(app => ({ name: app.Manifest.name, version: app.Manifest.version }))
     }
 
     /**
-     * The applications whose `<name>/live` pointer names a valid version that has a manifest, in listing order: the
-     * apps an environment delivers (ruling S3). A legacy app (no pointer) or one whose pointer is corrupt or names a
-     * missing version is not live.
+     * The applications whose live pointer names a version that has a valid manifest, by name: the apps an environment
+     * delivers (ruling S3). An app with no live version, or a pointer naming a missing or invalid manifest, is not live.
      */
     public async LiveApplications(): Promise<readonly PragmaticApplication[]>
     {
         const result: PragmaticApplication[] = []
-        for (const entry of await this.storage.List(PragmaticAppsRegistry.RootPath))
+        for (const record of await this.records.List())
         {
-            if (!entry.IsDirectory)
+            const app = PragmaticAppsRegistry.LiveOf(record)
+            if (app !== undefined)
             {
-                continue
+                result.push(app)
             }
-            const version = await this.LiveVersion(entry.Name)
-            if (version === undefined)
-            {
-                continue
-            }
-            const path = PragmaticAppsRegistry.VersionManifestPath(entry.Name, version)
-            if (!await this.storage.Exists(path))
-            {
-                continue
-            }
-            result.push(new PragmaticApplication(PragmaticAppManifestParser.Parse(await this.storage.ReadText(path))))
         }
         return result
     }
 
     /**
-     * The application in directory `name` when its `<name>/live` pointer names a version that has a manifest (what
-     * `application/open` binds, ruling S7); undefined for an invalid name and an unknown, legacy (no pointer) or
-     * broken-pointer app.
+     * The application `name` when its live pointer names a version that has a manifest (what `application/open` binds,
+     * ruling S7); undefined for an invalid name and an unknown or not-live app.
      */
     public async LiveApplicationFor(name: string): Promise<PragmaticApplication | undefined>
     {
@@ -87,28 +67,43 @@ export class PragmaticAppsRegistry
         {
             return undefined
         }
-        const version = await this.LiveVersion(name)
-        if (version === undefined)
-        {
-            return undefined
-        }
-        const path = PragmaticAppsRegistry.VersionManifestPath(name, version)
-        if (!await this.storage.Exists(path))
-        {
-            return undefined
-        }
-        return new PragmaticApplication(PragmaticAppManifestParser.Parse(await this.storage.ReadText(path)))
+        const record = await this.records.Get(name)
+        return record === undefined ? undefined : PragmaticAppsRegistry.LiveOf(record)
     }
 
+    /** The live application `name`; throws for an invalid name and an unknown or not-live app. */
     public async ApplicationFor(name: string): Promise<PragmaticApplication>
     {
         PragmaticAppsRegistry.AssertValidName(name)
-        const path = await this.ManifestPath(name)
-        if (!await this.storage.Exists(path))
+        const app = await this.LiveApplicationFor(name)
+        if (app === undefined)
         {
             throw new Error(PragmaticAppsRegistry.NotFoundError + name)
         }
-        return new PragmaticApplication(PragmaticAppManifestParser.Parse(await this.storage.ReadText(path)))
+        return app
+    }
+
+    /** The version the live pointer of `name` names, or undefined. */
+    public async LiveVersion(name: string): Promise<string | undefined>
+    {
+        return (await this.records.Get(name))?.live ?? undefined
+    }
+
+    /** The stored manifest of `name@version`, or undefined when that version was never committed. */
+    public async ManifestOf(name: string, version: string): Promise<PragmaticAppManifest | undefined>
+    {
+        const record = await this.records.Get(name)
+        return record !== undefined && Object.hasOwn(record.versions ?? {}, version) ? record.versions[version] : undefined
+    }
+
+    /** The commit of a deploy: adds `manifest` as its version and moves the live pointer to it, in one write. */
+    public async Commit(manifest: PragmaticAppManifest): Promise<void>
+    {
+        await this.records.Update(manifest.name, current => ({
+            id: manifest.name,
+            live: manifest.version,
+            versions: { ...(current?.versions ?? {}), [manifest.version]: manifest },
+        }))
     }
 
     /**
@@ -131,40 +126,24 @@ export class PragmaticAppsRegistry
             || PragmaticAppsRegistry.ControlCharPattern.test(name))
     }
 
-    /** `<name>/<version>/application.json` when `<name>/live` names a version, else the legacy `<name>/application.json` (also used when the pointer is corrupt). */
-    private async ManifestPath(name: string): Promise<string>
+    /** The record's live application, re-validated; undefined when no valid version is live. */
+    private static LiveOf(record: ApplicationRecord): PragmaticApplication | undefined
     {
-        const version = await this.LiveVersion(name)
-        if (version === undefined)
-        {
-            return name + PragmaticAppsRegistry.Separator + PragmaticAppsRegistry.ManifestFile
-        }
-        return PragmaticAppsRegistry.VersionManifestPath(name, version)
-    }
-
-    /** The version `<name>/live` names, or undefined when the pointer is absent, unreadable or not a valid name. */
-    private async LiveVersion(name: string): Promise<string | undefined>
-    {
-        const pointer = name + PragmaticAppsRegistry.Separator + PragmaticAppsRegistry.LivePointerFile
-        if (!await this.storage.Exists(pointer))
+        const version = record.live
+        if (typeof version !== 'string' || !PragmaticAppsRegistry.IsValidName(version) || !Object.hasOwn(record.versions ?? {}, version))
         {
             return undefined
         }
         try
         {
-            const version = (await this.storage.ReadText(pointer)).trim()
-            PragmaticAppsRegistry.AssertValidName(version)
-            return version
+            const manifest = PragmaticAppManifestParser.Parse(JSON.stringify(record.versions[version]))
+            // Serving builds the UI path from the manifest: it must be the record's own app and live version.
+            return manifest.name === record.id && manifest.version === version ? new PragmaticApplication(manifest) : undefined
         }
         catch
         {
-            // A corrupt or unreadable pointer must not abort listing: the caller falls back (legacy manifest, or not live).
+            // A corrupt stored manifest must not abort listing: the app is not live.
             return undefined
         }
-    }
-
-    private static VersionManifestPath(name: string, version: string): string
-    {
-        return name + PragmaticAppsRegistry.Separator + version + PragmaticAppsRegistry.Separator + PragmaticAppsRegistry.ManifestFile
     }
 }

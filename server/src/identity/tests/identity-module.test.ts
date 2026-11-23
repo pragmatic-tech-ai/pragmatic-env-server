@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { AuthMethod, Role, ResourceKind, PresentedSecret, Credential, AuthenticatedResult } from '@pragmatic-tech-ai/pragmatic-identity'
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class IdentityFixture
 {
@@ -29,9 +30,9 @@ class IdentityFixture
     public static Options(identityRoot: string, packagesRoot: string, keyEnv: string)
     {
         return {
+            platform: CustomPlatformFixture.Mem(),
             packagesRoot,
             identity: {
-                identityRoot,
                 masterKey: { base64Env: keyEnv },
                 environment: { id: 't1', displayName: 'Environment One' },
                 bootstrap: { adminEmail: 'admin@x.io', adminPrincipalId: 'admin', adminPasswordRef: 't1/bootstrap/admin', ownerGrant: true },

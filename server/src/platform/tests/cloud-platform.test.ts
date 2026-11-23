@@ -60,7 +60,7 @@ test('concurrent CreateIdentityStores on a cold platform share one SQL store set
 {
     const platform = await CloudFixture.Platform()
     const key = platform.ResolveMasterKey({ keyFilePath: 'x' })
-    const [x, y] = await Promise.all([platform.CreateIdentityStores('realms/a/identity', key), platform.CreateIdentityStores('realms/b/identity', key)])
+    const [x, y] = await Promise.all([platform.CreateIdentityStores('env-a', key), platform.CreateIdentityStores('env-b', key)])
     assert.equal(x.Accounts, y.Accounts)
 })
 
@@ -68,8 +68,8 @@ test('CreateIdentityStores yields a working set; two calls share the SQL stores 
 {
     const platform = await CloudFixture.Platform()
     const key = platform.ResolveMasterKey({ keyFilePath: 'x' })
-    const a = await platform.CreateIdentityStores('realms/a/identity', key)
-    const b = await platform.CreateIdentityStores('realms/b/identity', key)
+    const a = await platform.CreateIdentityStores('env-a', key)
+    const b = await platform.CreateIdentityStores('env-b', key)
     assert.equal(a.Accounts, b.Accounts)  // shared SQL store instance (opened once -> reopen-safe on pg-mem)
     assert.notEqual(a.Secrets, b.Secrets)  // per-realm Secrets
     const ta = new Realm(`cp-${randomUUID()}`, RealmKind.Saas, 'A')
@@ -98,4 +98,25 @@ test('CreatePackagesStorage and the registry come from the injected object store
     assert.equal(await storage.ReadText('a.txt'), 'hello')
     assert.ok(platform.CreateStorageProviderRegistry())
     assert.ok(platform.CreatePromptService())
+})
+
+test('cloud platform secrets are SqlSecretStore rows scoped env-server/<id>', async () =>
+{
+    const platform = await CloudFixture.Platform()
+    const key = platform.ResolveMasterKey({ keyFilePath: 'x' })
+    const stores = await platform.CreateIdentityStores('env-a', key)
+    await stores.Secrets.Put('oidc-secret', 'sekret')
+    const rows = await platform.Database.Session.Query('SELECT scope, reference, ciphertext FROM sealed_secrets', [])
+    assert.deepEqual(rows.map(r => [r.scope, r.reference]), [['env-server/env-a', 'oidc-secret']])
+    assert.ok(!String(rows[0]!.ciphertext).includes('sekret'))
+    assert.equal(await (await platform.CreateIdentityStores('env-a', key)).Secrets.Get('oidc-secret'), 'sekret')
+})
+
+test('a secret row copied to another environment\'s scope does not open', async () =>
+{
+    const platform = await CloudFixture.Platform()
+    const key = platform.ResolveMasterKey({ keyFilePath: 'x' })
+    await (await platform.CreateIdentityStores('env-a', key)).Secrets.Put('shared-ref', 'only-a')
+    await platform.Database.Session.Execute("INSERT INTO sealed_secrets (scope, reference, key_id, nonce, tag, ciphertext, updated_at) SELECT 'env-server/env-b', reference, key_id, nonce, tag, ciphertext, updated_at FROM sealed_secrets WHERE scope = 'env-server/env-a'", [])
+    assert.equal(await (await platform.CreateIdentityStores('env-b', key)).Secrets.Get('shared-ref'), null)
 })

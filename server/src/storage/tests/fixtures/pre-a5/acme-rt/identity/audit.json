@@ -1,0 +1,50 @@
+{
+  "events": [
+    {
+      "kind": 0,
+      "realmId": "acme-rt",
+      "principalId": "rita",
+      "at": "2026-11-01T10:00:00.000Z",
+      "detail": [
+        [
+          "method",
+          "password"
+        ]
+      ],
+      "hash": "47d038d6bafed5038a4d4fb359d124909cf1a9f6dd3584debf67cf49db6e98b6",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "kind": 2,
+      "realmId": "acme-rt",
+      "principalId": "rita",
+      "at": "2026-11-01T10:05:00.000Z",
+      "detail": [
+        [
+          "action",
+          "grant-role"
+        ]
+      ],
+      "hash": "cd0de92629c5ee50c4b52b46b1c5bcf8922a374bc989435f2d0a3136ae7bea3a",
+      "prevHash": "47d038d6bafed5038a4d4fb359d124909cf1a9f6dd3584debf67cf49db6e98b6"
+    },
+    {
+      "kind": 0,
+      "realmId": "acme-rt",
+      "principalId": null,
+      "at": "2026-11-01T10:06:00.000Z",
+      "detail": [
+        [
+          "method",
+          "password"
+        ],
+        [
+          "outcome",
+          "denied"
+        ]
+      ],
+      "hash": "2f6b46cccbbebcf74ef04fdeba48e9ebd8df6f732790db20c5d5dfa676abde5d",
+      "prevHash": "cd0de92629c5ee50c4b52b46b1c5bcf8922a374bc989435f2d0a3136ae7bea3a"
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role,
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { RateLimitGuard, TokenBucketRateLimiter, AuditSurface, AuditOutcome, type IAccessAuditSink, type AccessAuditEvent } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class CapturingSink implements IAccessAuditSink
 {
@@ -46,7 +47,7 @@ test('a per-principal breach rejects the RPC and audits a RateLimited Rpc event'
     const guard = new RateLimitGuard(new TokenBucketRateLimiter({ perPrincipal: { Rps: 0.001, Burst: 1 } }), sink)
     const packages = mkdtempSync(join(tmpdir(), 'ps-pkgs-'))
     const solution = Fixtures.SolutionDir()
-    const server = new PragmaticServer({ packagesRoot: packages })
+    const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
     await server.Start()
     const languageService = await server.LanguageService()
     const manager = await server.Manager()

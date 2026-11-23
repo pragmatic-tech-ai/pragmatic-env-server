@@ -14,6 +14,7 @@ import { ConnectorError, ConnectorPhase } from '@pragmatic-tech-ai/pragmatic-gra
 import { type IDispatchDiagnostics, LoggerDispatchDiagnostics } from '../dispatch-diagnostics.js'
 import { DataSourceFailure } from '../engine/data-source-failure.js'
 import { StructuredLogger } from '@pragmatic-tech-ai/pragmatic-observability'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 /** Connector endpoints whose every call rejects with `thrown` (the dispatch path under test sees the raw error). */
 class FailingConnectors implements IGraphConnectorService
@@ -115,7 +116,7 @@ class Fixtures
     public static async NoSolutionFailure(): Promise<{ code?: number, message?: string }>
     {
         const packages = mkdtempSync(join(tmpdir(), 'ps-pkgs-'))
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         const languageService = await server.LanguageService()
         const manager = await server.Manager()
@@ -151,7 +152,7 @@ class Fixtures
     public static async Failure(thrown: unknown, instrumentation?: RequestInstrumentation, diagnostics: IDispatchDiagnostics = new RecordedDiagnostics()): Promise<{ code?: number, message?: string, data?: unknown, serialized: string }>
     {
         const packages = mkdtempSync(join(tmpdir(), 'ps-pkgs-'))
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         const languageService = await server.LanguageService()
         const manager = await server.Manager()

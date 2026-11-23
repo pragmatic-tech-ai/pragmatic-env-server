@@ -1,0 +1,20 @@
+{
+  "grants": [
+    {
+      "subject": "ann",
+      "role": 3,
+      "resourceKind": 0,
+      "resourceRealmId": "acme-dev",
+      "resourcePath": []
+    },
+    {
+      "subject": "eng",
+      "role": 1,
+      "resourceKind": 1,
+      "resourceRealmId": "acme-dev",
+      "resourcePath": [
+        "hr"
+      ]
+    }
+  ]
+}

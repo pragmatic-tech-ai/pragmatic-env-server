@@ -14,6 +14,7 @@ import { CallerCredentialAdapterFactory, CallerCredentialError, CallerCredential
 import { CallerCredentials } from '../caller-credentials.js'
 import { PragmaticServer } from '../../../pragmatic-server.js'
 import { EnvironmentPurpose } from '../../../environments/environment-purpose.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
 
 /** An inner adapter that answers every read with the secret it was opened with; `AuthFails` makes reads fail as Auth. */
 class TokenEchoAdapter implements IDataSourceAdapter
@@ -440,7 +441,7 @@ describe('caller credentials registration', () =>
 {
     test('every adapter kind the server registers is wrapped in the caller\'s credentials', async () =>
     {
-        const server = new CatalogServer({ purpose: EnvironmentPurpose.Runtime })
+        const server = new CatalogServer({ platform: CustomPlatformFixture.Mem(), purpose: EnvironmentPurpose.Runtime })
         try
         {
             const catalog = server.Catalog()

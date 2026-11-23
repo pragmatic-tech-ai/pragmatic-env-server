@@ -7,6 +7,7 @@ import { InMemoryEnvironmentProvisioning, EnvironmentRegistry } from '../../envi
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { EffectivePurposeResolver } from '../effective-purpose-resolver.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class PurposeRoutingFixture
 {
@@ -17,7 +18,7 @@ class PurposeRoutingFixture
 
     public static Server(provisioning: { purpose?: EnvironmentPurpose, runtimeCoHosted?: boolean }): PragmaticServer
     {
-        const registry = new EnvironmentRegistry(PurposeRoutingFixture.BaseDir, { base64Env: PurposeRoutingFixture.KeyEnv }, new InMemoryEnvironmentProvisioning(new Map()), new InMemoryEnvironmentCoordinator())
+        const registry = new EnvironmentRegistry(PurposeRoutingFixture.BaseDir, { base64Env: PurposeRoutingFixture.KeyEnv }, new InMemoryEnvironmentProvisioning(new Map()), new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem())
         return new PragmaticServer(registry.OptionsFor(PurposeRoutingFixture.EnvironmentId, { displayName: PurposeRoutingFixture.Display, ...provisioning }))
     }
 

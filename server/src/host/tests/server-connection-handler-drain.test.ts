@@ -14,6 +14,7 @@ import { Observability, ObservabilityRole, DrainController } from '@pragmatic-te
 import { RequestInstrumentation } from '../../observability/request-instrumentation.js'
 import { NullLogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { WsInFlightSource } from '../../observability/ws-in-flight-source.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Fixtures
 {
@@ -55,7 +56,7 @@ class Harness
 
     public static async Create(gate: Promise<void>, instrumentation?: RequestInstrumentation): Promise<Harness>
     {
-        const server = new PragmaticServer({ packagesRoot: mkdtempSync(join(tmpdir(), 'ps-pkgs-drain-')) })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: mkdtempSync(join(tmpdir(), 'ps-pkgs-drain-')) })
         await server.Start()
         const service = (await server.LanguageService()) as SolutionLanguageService
         const manager = await server.Manager()

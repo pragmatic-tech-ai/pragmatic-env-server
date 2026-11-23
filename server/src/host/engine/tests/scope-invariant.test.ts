@@ -17,6 +17,7 @@ import { PpSecurityHarness } from '../../cypher/tests/pp-security-harness.js'
 import { ServerConnectionHandler } from '../../server-connection-handler.js'
 import { Coverage, Invariant, InvariantText } from './scope-invariant-assertions.js'
 import type { IExpectedVisibility } from './scope-invariant-assertions.js'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
 
 /**
  * Spec §12 and §5.1 (PR13), dev half: authoring data is governed by the identity RBAC at the PolicyGate only, so every
@@ -71,7 +72,6 @@ class InvariantFx
     public static readonly ModelViewPageSize = 2
     public static readonly SolutionPrefix = 'inv-sol-'
     public static readonly PackagesPrefix = 'inv-pkgs-'
-    public static readonly IdentityPrefix = 'inv-id-'
     private static readonly RootName = 'Root'
     private static readonly SalesName = 'Sales'
 
@@ -282,11 +282,10 @@ class InvariantWorld
     {
         const solution = mkdtempSync(join(tmpdir(), InvariantFx.SolutionPrefix))
         const packages = mkdtempSync(join(tmpdir(), InvariantFx.PackagesPrefix))
-        const identityRoot = mkdtempSync(join(tmpdir(), InvariantFx.IdentityPrefix))
         cpSync(join(import.meta.dirname, '..', '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
         writeFileSync(join(solution, InvariantFx.ModelsDir, InvariantFx.ModelFileName), InvariantFx.Todl())
         PpSecurityHarness.SetKey()
-        const server = new PragmaticServer({ packagesRoot: packages, identity: PpSecurityHarness.Identity(identityRoot) })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages, identity: PpSecurityHarness.Identity() })
         let world: InvariantWorld | undefined
         try
         {
@@ -305,7 +304,6 @@ class InvariantWorld
             PpSecurityHarness.ClearKey()
             rmSync(solution, { recursive: true, force: true })
             rmSync(packages, { recursive: true, force: true })
-            rmSync(identityRoot, { recursive: true, force: true })
         }
     }
 

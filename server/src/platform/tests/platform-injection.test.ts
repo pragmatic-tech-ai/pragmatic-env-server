@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IStorage, IPromptService } from '@pragmatic-tech-ai/todl-runtime'
 import type { IStorageProviderRegistry } from '@pragmatic-tech-ai/todl'
-import type { IdentityStoreSet, IRealmConfigStore } from '@pragmatic-tech-ai/pragmatic-identity'
-import { NodePlatform } from '../node-platform.js'
+import type { IdentityStoreSet, IRealmConfigStore, IAuditSink } from '@pragmatic-tech-ai/pragmatic-identity'
+import type { EnvServerDatabase } from '../../storage/env-server-database.js'
+import { CustomPlatformFixture } from './custom-platform-fixture.js'
 import type { PlatformServices } from '../platform-services.js'
 import type { MasterKeyRef } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { PragmaticServer } from '../../pragmatic-server.js'
@@ -20,8 +21,13 @@ class RecordingPlatform implements PlatformServices
     public static readonly IdentityStoresCall = 'identityStores'
     public static readonly EnvironmentConfigCall = 'realmConfig'
 
-    private readonly inner = new NodePlatform()
+    private readonly inner = CustomPlatformFixture.Mem()
     public readonly calls: string[] = []
+
+    public get Database(): EnvServerDatabase
+    {
+        return this.inner.Database
+    }
 
     public CreateStorageProviderRegistry(): IStorageProviderRegistry
     {
@@ -52,16 +58,21 @@ class RecordingPlatform implements PlatformServices
         return this.inner.ResolveMasterKey(ref)
     }
 
-    public CreateIdentityStores(identityRoot: string, masterKey: Buffer): Promise<IdentityStoreSet>
+    public CreateIdentityStores(environmentId: string, masterKey: Buffer): Promise<IdentityStoreSet>
     {
         this.calls.push(RecordingPlatform.IdentityStoresCall)
-        return this.inner.CreateIdentityStores(identityRoot, masterKey)
+        return this.inner.CreateIdentityStores(environmentId, masterKey)
     }
 
-    public CreateRealmConfigStore(configRoot: string): Promise<IRealmConfigStore>
+    public CreateRealmConfigStore(environmentId: string): Promise<IRealmConfigStore>
     {
         this.calls.push(RecordingPlatform.EnvironmentConfigCall)
-        return this.inner.CreateRealmConfigStore(configRoot)
+        return this.inner.CreateRealmConfigStore(environmentId)
+    }
+
+    public AuditSink(): Promise<IAuditSink>
+    {
+        return this.inner.AuditSink()
     }
 }
 
@@ -88,7 +99,6 @@ test('a server built with an injected platform routes all infra + identity throu
         packagesRoot: join(base, 'packages'),
         platform,
         identity: {
-            identityRoot: join(base, 'identity'),
             masterKey: { keyFilePath: InjectionFixture.KeyFile(base) },
             environment: { id: 't1', displayName: 'T1' },
         },

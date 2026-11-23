@@ -12,6 +12,7 @@ import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
 import type { PragmaticAppsRegistry } from '../apps/pragmatic-apps-registry.js'
 import type { IEnvironmentDataService } from '../environment/environment-data-service.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 /** A data service whose data/write is the test's stub; the share and assign ops are not used here. */
 class WriteOnlyData implements IEnvironmentDataService
@@ -88,7 +89,7 @@ class EndpointFixture
     public static async With(purpose: EnvironmentPurpose, context: AccessContext, write: (name: string, ops: readonly AppWriteOpDto[]) => Promise<AppWriteResultDto>, body: (client: PragmaticClient) => Promise<void>): Promise<void>
     {
         const packages = mkdtempSync(join(tmpdir(), EndpointFixture.PackagesPrefix))
-        const server = new PragmaticServer({ packagesRoot: packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         const languageService = await server.LanguageService()
         const manager = await server.Manager()

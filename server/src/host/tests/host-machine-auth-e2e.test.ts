@@ -17,6 +17,7 @@ import { MachineCertAuthenticator } from '../machine-cert-authenticator.js'
 import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class MachineFixture
 {
@@ -167,7 +168,7 @@ test('a host with clientTls listens over TLS and serves a no-cert client', async
     const keyPath = join(dir, 'key')
     writeFileSync(keyPath, randomBytes(32))
     const entries = new Map<string, EnvironmentProvisioning>([['t1', { displayName: 'Environment One' }]])
-    const host = await PragmaticServerHost.StartAsync({ port: 0, baseDir: dir, masterKey: { keyFilePath: keyPath }, provisioning: new InMemoryEnvironmentProvisioning(entries), clientTls: MachineFixture.ServerRef })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), port: 0, baseDir: dir, masterKey: { keyFilePath: keyPath }, provisioning: new InMemoryEnvironmentProvisioning(entries), clientTls: MachineFixture.ServerRef })
     try
     {
         const res = await new Promise<number>((resolve, reject) =>

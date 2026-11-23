@@ -8,19 +8,27 @@ import { InMemoryEnvironmentCoordinator } from '../environment-coordinator.js'
 import { InMemoryEnvironmentProvisioning, EnvironmentRegistry } from '../environment-registry.js'
 import type { EnvironmentProvisioning } from '../environment-provisioning.js'
 import type { IdentityStoreSet } from '@pragmatic-tech-ai/pragmatic-identity'
-import { NodePlatform } from '../../platform/node-platform.js'
+import { CustomPlatform } from '../../platform/custom-platform.js'
+import { EnvServerTestDatabase } from '../../storage/tests/env-server-test-database.js'
+import { NodeStorageProviderRegistry } from '@pragmatic-tech-ai/pragmatic-realm-custom'
 import { DeploymentMode } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
-class RecordingPlatform extends NodePlatform
+class RecordingPlatform extends CustomPlatform
 {
     public static readonly IdentityStoresCall = 'identityStores'
 
     public readonly calls: string[] = []
 
-    public override CreateIdentityStores(identityRoot: string, masterKey: Buffer): Promise<IdentityStoreSet>
+    public constructor()
+    {
+        super(EnvServerTestDatabase.Mem(), new NodeStorageProviderRegistry())
+    }
+
+    public override CreateIdentityStores(environmentId: string, masterKey: Buffer): Promise<IdentityStoreSet>
     {
         this.calls.push(RecordingPlatform.IdentityStoresCall)
-        return super.CreateIdentityStores(identityRoot, masterKey)
+        return super.CreateIdentityStores(environmentId, masterKey)
     }
 }
 
@@ -56,7 +64,7 @@ class RegistryFixture
     public static Registry(baseDir: string, provisioning: InMemoryEnvironmentProvisioning): EnvironmentRegistry
     {
         process.env[RegistryFixture.KeyEnv] = randomBytes(32).toString('base64')
-        return new EnvironmentRegistry(baseDir, { base64Env: RegistryFixture.KeyEnv }, provisioning, new InMemoryEnvironmentCoordinator())
+        return new EnvironmentRegistry(baseDir, { base64Env: RegistryFixture.KeyEnv }, provisioning, new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem())
     }
 }
 
@@ -153,23 +161,6 @@ test('EnvironmentRegistry threads the injected platform to each environment serv
     {
         await registry.ServerFor('t1')
         assert.ok(recording.calls.includes(RecordingPlatform.IdentityStoresCall))
-    }
-    finally
-    {
-        await registry.DisposeAll()
-        rmSync(baseDir, { recursive: true, force: true })
-        delete process.env[RegistryFixture.KeyEnv]
-    }
-})
-
-test('EnvironmentRegistry threads deploymentMode: Cloud with no platform fails closed', async () =>
-{
-    const { baseDir } = RegistryFixture.Dirs()
-    process.env[RegistryFixture.KeyEnv] = randomBytes(32).toString('base64')
-    const registry = new EnvironmentRegistry(baseDir, { base64Env: RegistryFixture.KeyEnv }, RegistryFixture.Provisioning('t1'), new InMemoryEnvironmentCoordinator(), undefined, DeploymentMode.Cloud)
-    try
-    {
-        await assert.rejects(() => registry.ServerFor('t1'), /explicit platform bundle/)
     }
     finally
     {

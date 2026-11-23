@@ -32,7 +32,6 @@ export class EnvironmentRegistry
     private static readonly ApplicationsDir = 'applications'
     private static readonly GraphsDir = 'graphs'
     private static readonly SolutionsDir = 'solutions'
-    private static readonly IdentityDir = 'identity'
     private static readonly UnprovisionedError = 'environment is not provisioned'
     private static readonly InvalidEnvironmentError = 'invalid environment id'
     private static readonly ParentSegment = '..'
@@ -46,7 +45,7 @@ export class EnvironmentRegistry
     private readonly provisionedSecrets: IProvisionedSecretSource | undefined
     private readonly lostDuringBuild = new Set<string>()
     private readonly identityRuntime: IdentityRuntime | undefined
-    private readonly platform: PlatformServices | undefined
+    private readonly platform: PlatformServices
     private readonly adapterPacks: AdapterPacksConfig | undefined
     private readonly deploymentMode: DeploymentMode | undefined
     /** The host's logger, handed to every environment server it builds. */
@@ -55,7 +54,7 @@ export class EnvironmentRegistry
     private readonly pending = new Map<string, Promise<PragmaticServer>>()
     private readonly disposing = new Map<string, Promise<void>>()
 
-    public constructor(baseDir: string, masterKey: MasterKeyRef, provisioning: IEnvironmentProvisioning, coordinator: IEnvironmentCoordinator, platform?: PlatformServices, deploymentMode?: DeploymentMode, ownership: IEnvironmentOwnership = new InMemoryEnvironmentOwnership(), provisionedSecrets?: IProvisionedSecretSource, identityRuntime?: IdentityRuntime, adapterPacks?: AdapterPacksConfig, logger?: ILogger)
+    public constructor(baseDir: string, masterKey: MasterKeyRef, provisioning: IEnvironmentProvisioning, coordinator: IEnvironmentCoordinator, platform: PlatformServices, deploymentMode?: DeploymentMode, ownership: IEnvironmentOwnership = new InMemoryEnvironmentOwnership(), provisionedSecrets?: IProvisionedSecretSource, identityRuntime?: IdentityRuntime, adapterPacks?: AdapterPacksConfig, logger?: ILogger)
     {
         this.adapterPacks = adapterPacks
         this.logger = logger
@@ -243,7 +242,6 @@ export class EnvironmentRegistry
             writeLock: this.ownership.WriteLock?.(environmentId),
             ...(this.logger === undefined ? {} : { logger: this.logger }),
             identity: {
-                identityRoot: join(this.baseDir, environmentId, EnvironmentRegistry.IdentityDir),
                 masterKey: this.masterKey,
                 environment: { id: environmentId, displayName: provisioning.displayName },
                 bootstrap: provisioning.bootstrap,

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, cpSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, cpSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { InMemoryMessageSocket, PragmaticClient, ErrorCodes, ResponseError } from '@pragmatic-tech-ai/pragmatic-protocol'
@@ -9,6 +9,10 @@ import { AccessContext, Principal, PrincipalKind, Realm, RealmKind, Grant, Role,
 import { PragmaticServer } from '../../pragmatic-server.js'
 import { EnvironmentPurpose } from '../../environments/environment-purpose.js'
 import { ServerConnectionHandler } from '../server-connection-handler.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
+import type { ApplicationRecord } from '../apps/pragmatic-apps-registry.js'
+import { EnvServerRegistry } from '../../storage/env-server-registry.js'
+import { EnvironmentRecords } from '../../storage/environment-records.js'
 
 /**
  * The cross-purpose surface of the runtime application methods (the runtime `cypher/*` endpoints on the environment
@@ -19,8 +23,6 @@ class RuntimeSurfaceFixture
     private static readonly PkgPrefix = 'rs-pkgs-'
     private static readonly AppsPrefix = 'rs-apps-'
     private static readonly SolPrefix = 'rs-sol-'
-    private static readonly ManifestFile = 'application.json'
-    private static readonly LivePointerFile = 'live'
     private static readonly NoConnectors = 'no connectors'
     private static readonly SolutionModelFile = join('models', 'model.todl')
     private static readonly SolutionModel = 'namespace acme { concept Service { } model Shop : acme { Service s1 { label = "alpha"; } } }'
@@ -29,7 +31,8 @@ class RuntimeSurfaceFixture
     public static readonly ServiceLabels = 'MATCH (a:Service) RETURN a.label'
     public static readonly Alpha = 'alpha'
     public static readonly NotRuntime = /operation requires a runtime environment/
-    public static readonly NameMismatch = /does not match requested name/
+    /** A record whose live manifest names another app is not live (fail closed, A5): open refuses it as unknown. */
+    public static readonly NameMismatch = /no live application named/
     public static readonly EnvironmentId = 't1'
     public static readonly PrincipalId = 'p1'
     public static readonly EnvironmentName = 'Environment One'
@@ -37,6 +40,8 @@ class RuntimeSurfaceFixture
 
     public readonly Packages = mkdtempSync(join(tmpdir(), RuntimeSurfaceFixture.PkgPrefix))
     public readonly Apps = mkdtempSync(join(tmpdir(), RuntimeSurfaceFixture.AppsPrefix))
+    /** The platform the Runtime server runs on (its database holds the applications registry). */
+    public readonly Platform = CustomPlatformFixture.Mem()
     private readonly disposables: Array<() => Promise<void>> = []
 
     public static Permissive(): AccessContext
@@ -60,18 +65,17 @@ class RuntimeSurfaceFixture
         }
     }
 
-    /** Makes version `Version` of `app` live with a manifest named `name` and no packages. */
-    public LiveManifest(app: string, name: string): void
+    /** Makes version `Version` of `app` live in the registry with a manifest named `name` and no packages. */
+    public async LiveManifest(app: string, name: string): Promise<void>
     {
-        mkdirSync(join(this.Apps, app, RuntimeSurfaceFixture.Version), { recursive: true })
-        writeFileSync(join(this.Apps, app, RuntimeSurfaceFixture.Version, RuntimeSurfaceFixture.ManifestFile), JSON.stringify({ name, version: RuntimeSurfaceFixture.Version, packages: [] }))
-        writeFileSync(join(this.Apps, app, RuntimeSurfaceFixture.LivePointerFile), RuntimeSurfaceFixture.Version)
+        const records = new EnvironmentRecords<ApplicationRecord>(this.Platform.Database, EnvServerRegistry.Applications, RuntimeSurfaceFixture.EnvironmentId)
+        await records.Put({ id: app, live: RuntimeSurfaceFixture.Version, versions: { [RuntimeSurfaceFixture.Version]: { name, version: RuntimeSurfaceFixture.Version, packages: [] } } })
     }
 
     /** Starts a Runtime server over the fixture's directories and returns a function producing connected clients. */
     public async Runtime(): Promise<() => Promise<PragmaticClient>>
     {
-        const server = new PragmaticServer({ packagesRoot: this.Packages, applicationsRoot: this.Apps, purpose: EnvironmentPurpose.Runtime })
+        const server = new PragmaticServer({ platform: this.Platform, environmentId: RuntimeSurfaceFixture.EnvironmentId, packagesRoot: this.Packages, applicationsRoot: this.Apps, purpose: EnvironmentPurpose.Runtime })
         await server.Start()
         this.disposables.push(async () =>
         {
@@ -87,7 +91,7 @@ class RuntimeSurfaceFixture
         const solution = mkdtempSync(join(tmpdir(), RuntimeSurfaceFixture.SolPrefix))
         cpSync(join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
         writeFileSync(join(solution, RuntimeSurfaceFixture.SolutionModelFile), RuntimeSurfaceFixture.SolutionModel)
-        const server = new PragmaticServer({ packagesRoot: this.Packages })
+        const server = new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: this.Packages })
         await server.Start()
         await server.OpenSolution(solution)
         const manager = await server.Manager()
@@ -159,11 +163,11 @@ test('runtime e2e: development environment rejects application/* but still queri
     })
 })
 
-test('runtime e2e: open rejects a manifest whose name differs from its directory', async () =>
+test('runtime e2e: open rejects a live manifest whose name differs from its application record', async () =>
 {
     await RuntimeSurfaceFixture.Run(async fx =>
     {
-        fx.LiveManifest(RuntimeSurfaceFixture.AppA, RuntimeSurfaceFixture.Renamed)
+        await fx.LiveManifest(RuntimeSurfaceFixture.AppA, RuntimeSurfaceFixture.Renamed)
         const client = await (await fx.Runtime())()
         await assert.rejects(() => client.OpenApplication(RuntimeSurfaceFixture.AppA), RuntimeSurfaceFixture.NameMismatch)
     })

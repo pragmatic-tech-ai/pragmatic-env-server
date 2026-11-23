@@ -13,6 +13,7 @@ import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import { AuditSurface, AuditOutcome, type IAccessAuditSink, type AccessAuditEvent } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class CapturingSink implements IAccessAuditSink
 {
@@ -45,7 +46,7 @@ class AuthAuditFixture
         const keyEnv = 'PS_AUTH_AUDIT_KEY'
         process.env[keyEnv] = randomBytes(32).toString('base64')
         const entries = new Map<string, EnvironmentProvisioning>([['t1', { displayName: 'Environment One' }]])
-        const host = await PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: keyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries), audit })
+        const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir, masterKey: { base64Env: keyEnv }, provisioning: new InMemoryEnvironmentProvisioning(entries), audit })
         const pack = await host.IdentityPackForTest('t1')
         await pack.Registrar.Register(await host.RealmForTest('t1'), 'a@x.io', 'p1', new PresentedSecret('pw-123456'))
         await pack.Grants.Save(new Grant('p1', Role.Admin, new ResourceRef(ResourceKind.Realm, 't1', [])))

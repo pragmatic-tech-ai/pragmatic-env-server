@@ -8,6 +8,7 @@ import { InMemoryEnvironmentCoordinator } from '../environment-coordinator.js'
 import { EnvironmentRegistry, InMemoryEnvironmentProvisioning } from '../environment-registry.js'
 import type { EnvironmentProvisioning } from '../environment-provisioning.js'
 import { ProvisionedSecretSource } from '../../config/provisioned-secret-source.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 test('connectorSecretRefs are provisioned into the environment store through the registry', async () =>
 {
@@ -18,7 +19,7 @@ test('connectorSecretRefs are provisioned into the environment store through the
     entries.set('t1', { displayName: 'Environment One', connectorSecretRefs: ['t1/crm/pw'] })
     const provisioning = new InMemoryEnvironmentProvisioning(entries)
     const source = ProvisionedSecretSource.FromText('{"t1/crm/pw":"conn-secret"}')
-    const registry = new EnvironmentRegistry(baseDir, { base64Env: keyEnv }, provisioning, new InMemoryEnvironmentCoordinator(), undefined, undefined, undefined, source)
+    const registry = new EnvironmentRegistry(baseDir, { base64Env: keyEnv }, provisioning, new InMemoryEnvironmentCoordinator(), CustomPlatformFixture.Mem(), undefined, undefined, source)
     try
     {
         const server = await registry.ServerFor('t1')

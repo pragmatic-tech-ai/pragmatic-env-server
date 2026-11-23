@@ -3,14 +3,21 @@ import assert from 'node:assert/strict'
 import { request } from 'node:http'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { NodeFsStorage } from '@pragmatic-tech-ai/todl-runtime/node'
 import { PragmaticServerHost } from '../../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../../environments/environment-registry.js'
 import { EnvironmentPurpose } from '../../../environments/environment-purpose.js'
 import type { EnvironmentProvisioning } from '../../../environments/environment-provisioning.js'
-import { PragmaticAppManifestParser } from '../pragmatic-app-manifest.js'
+import { PragmaticAppManifestParser, type PragmaticAppManifest } from '../pragmatic-app-manifest.js'
+import { PragmaticAppsRegistry, type ApplicationRecord } from '../pragmatic-apps-registry.js'
 import { PresentedSecret } from '@pragmatic-tech-ai/pragmatic-identity'
+import { CustomPlatformFixture } from '../../../platform/tests/custom-platform-fixture.js'
+import { EnvServerRegistry } from '../../../storage/env-server-registry.js'
+import { EnvironmentRecords } from '../../../storage/environment-records.js'
+import { EnvServerTestDatabase } from '../../../storage/tests/env-server-test-database.js'
+import { AppServingHarness } from './app-serving-harness.js'
 
 interface Reply
 {
@@ -25,6 +32,7 @@ class ServeFixture
 {
     public static readonly Environment = 't1'
     public static readonly App = 'shop'
+    public static readonly SeedVersion = '1.0.0'
     public static readonly Shell = '<html><head><title>x</title></head><body>shell</body></html>'
     public static readonly Script = 'console.log(1)'
     public static readonly Secret = 'TOP-SECRET'
@@ -33,41 +41,62 @@ class ServeFixture
     public static readonly Password = 'pw-123456'
 
     public readonly Dir = mkdtempSync(join(tmpdir(), 'serve-'))
+    /** The platform the host runs on (its database holds the applications registry). */
+    public readonly Platform = CustomPlatformFixture.Mem()
     /** The browser session cookie of the signed-in test account (Start signs in); '' for an anonymous request. */
     public Cookie = ''
 
-    /** Writes a version-scoped tree `<app>/<version>/{application.json,ui/...}` whose shell names the version. */
+    /** Writes the UI tree `<app>/<version>/ui/...` (the applications storage) whose shell and script name the version. */
     public WriteVersion(version: string): void
     {
         const root = join(this.Dir, ServeFixture.Environment, 'applications', ServeFixture.App, version)
         mkdirSync(join(root, 'ui', 'assets'), { recursive: true })
         writeFileSync(join(root, 'ui', 'index.html'), '<html><head></head><body>shell-' + version + '</body></html>')
         writeFileSync(join(root, 'ui', 'assets', 'app.js'), 'console.log("' + version + '")')
-        writeFileSync(join(root, 'application.json'), JSON.stringify({ name: ServeFixture.App, version, packages: [], ui: { entry: 'index.html', assets: ['assets/app.js'] } }))
     }
 
-    public WriteLive(version: string): void
+    /** The environment's applications records (what the host's server reads, in the fixture platform's database). */
+    public Records(): EnvironmentRecords<ApplicationRecord>
     {
-        writeFileSync(join(this.Dir, ServeFixture.Environment, 'applications', ServeFixture.App, 'live'), version)
+        return new EnvironmentRecords<ApplicationRecord>(this.Platform.Database, EnvServerRegistry.Applications, ServeFixture.Environment)
     }
 
-    public async Start(legacy = true): Promise<PragmaticServerHost>
+    /** Commits the manifest of `version` (listing the shell and the script) and makes it live. */
+    public Commit(version: string): Promise<void>
+    {
+        return new PragmaticAppsRegistry(this.Records()).Commit(ServeFixture.Manifest(version))
+    }
+
+    /** Points the application's live version at `version` (any string: the registry validates it on read). */
+    public async SetLive(version: string): Promise<void>
+    {
+        await this.Records().Update(ServeFixture.App, current => ({ id: ServeFixture.App, live: version, versions: current?.versions ?? {} }))
+    }
+
+    public static Manifest(version: string): PragmaticAppManifest
+    {
+        return { name: ServeFixture.App, version, packages: [], ui: { entry: 'index.html', assets: ['assets/app.js'] } }
+    }
+
+    /** Starts the host; `seeded` (default) first deploys version `SeedVersion` with the fixed shell and script. */
+    public async Start(seeded = true): Promise<PragmaticServerHost>
     {
         const keyPath = join(this.Dir, 'key')
         writeFileSync(keyPath, randomBytes(32))
         const entries = new Map<string, EnvironmentProvisioning>()
         entries.set(ServeFixture.Environment, { displayName: 'Environment One', purpose: EnvironmentPurpose.Runtime })
         const apps = join(this.Dir, ServeFixture.Environment, 'applications')
-        if (legacy)
+        if (seeded)
         {
-            const ui = join(apps, ServeFixture.App, 'ui')
+            const ui = join(apps, ServeFixture.App, ServeFixture.SeedVersion, 'ui')
             mkdirSync(join(ui, 'assets'), { recursive: true })
             writeFileSync(join(ui, 'index.html'), ServeFixture.Shell)
             writeFileSync(join(ui, 'assets', 'app.js'), ServeFixture.Script)
-            writeFileSync(join(apps, ServeFixture.App, 'application.json'), JSON.stringify({ name: ServeFixture.App, version: '1.0.0', packages: [], ui: { entry: 'index.html', assets: ['assets/app.js'] } }))
+            await this.Commit(ServeFixture.SeedVersion)
         }
+        mkdirSync(apps, { recursive: true })
         writeFileSync(join(apps, 'secret.txt'), ServeFixture.Secret)
-        const host = await PragmaticServerHost.StartAsync({ port: 0, baseDir: this.Dir, masterKey: { keyFilePath: keyPath }, provisioning: new InMemoryEnvironmentProvisioning(entries) })
+        const host = await PragmaticServerHost.StartAsync({ platform: this.Platform, port: 0, baseDir: this.Dir, masterKey: { keyFilePath: keyPath }, provisioning: new InMemoryEnvironmentProvisioning(entries) })
         this.Cookie = await ServeFixture.SignIn(host)
         return host
     }
@@ -111,6 +140,39 @@ class ServeFixture
             req.on('error', reject)
             req.end()
         })
+    }
+}
+
+/** The endpoint over one environment's registry and applications storage, without a host. */
+class DirectServeFixture
+{
+    public static readonly Environment = 't1'
+    public static readonly App = 'shop'
+    public static readonly Route = '/app/t1/shop/'
+
+    public readonly Dir = mkdtempSync(join(tmpdir(), 'serve-direct-'))
+    public readonly Storage = new NodeFsStorage(this.Dir)
+    public readonly Registry = new PragmaticAppsRegistry(new EnvironmentRecords<ApplicationRecord>(EnvServerTestDatabase.Mem(), EnvServerRegistry.Applications, DirectServeFixture.Environment))
+
+    /** Writes `files` (path under `<app>/<version>/`, content) into the applications storage. */
+    public Write(version: string, files: Readonly<Record<string, string>>): void
+    {
+        for (const [path, content] of Object.entries(files))
+        {
+            const full = join(this.Dir, DirectServeFixture.App, version, path)
+            mkdirSync(dirname(full), { recursive: true })
+            writeFileSync(full, content)
+        }
+    }
+
+    public static Manifest(version: string, assets: readonly string[]): PragmaticAppManifest
+    {
+        return { name: DirectServeFixture.App, version, packages: [], ui: { entry: 'index.html', assets: [...assets] } }
+    }
+
+    public Dispose(): void
+    {
+        rmSync(this.Dir, { recursive: true, force: true })
     }
 }
 
@@ -183,11 +245,11 @@ test('the manifest parser reads a validated ui and rejects unsafe paths', () =>
     }
 })
 
-test('serving reads <app>/live then serves <app>/<version>/ui/<file> and the version manifest', async () =>
+test('serving reads the live version from the registry, then serves <app>/<version>/ui/<file>', async () =>
 {
     const fixture = new ServeFixture()
     fixture.WriteVersion('2.0.0')
-    fixture.WriteLive('2.0.0')
+    await fixture.Commit('2.0.0')
     const host = await fixture.Start(false)
     try
     {
@@ -206,18 +268,19 @@ test('serving reads <app>/live then serves <app>/<version>/ui/<file> and the ver
     }
 })
 
-test("after re-pointing <app>/live to an earlier version, serving returns that earlier version's assets", async () =>
+test("after re-pointing the live version to an earlier one, serving returns that earlier version's assets", async () =>
 {
     const fixture = new ServeFixture()
     fixture.WriteVersion('1.0.0')
     fixture.WriteVersion('2.0.0')
-    fixture.WriteLive('2.0.0')
+    await fixture.Commit('1.0.0')
+    await fixture.Commit('2.0.0')
     const host = await fixture.Start(false)
     try
     {
         const port = host.Address().port
         assert.ok((await fixture.Fetch(port,'/app/t1/shop/assets/app.js')).body.includes('2.0.0'))
-        fixture.WriteLive('1.0.0')
+        await fixture.SetLive('1.0.0')
         const shell = await fixture.Fetch(port,'/app/t1/shop/')
         assert.ok(shell.body.includes('shell-1.0.0'))
         assert.ok((await fixture.Fetch(port,'/app/t1/shop/assets/app.js')).body.includes('1.0.0'))
@@ -229,17 +292,19 @@ test("after re-pointing <app>/live to an earlier version, serving returns that e
     }
 })
 
-test('serving falls back to the legacy <app>/ui + <app>/application.json when <app>/live is absent', async () =>
+test('a live version that is not a safe segment answers 404 even when an unguarded read would succeed', async () =>
 {
     const fixture = new ServeFixture()
-    const host = await fixture.Start()
+    fixture.WriteVersion('2.0.0')
+    await fixture.Commit('2.0.0')
+    const host = await fixture.Start(false)
     try
     {
-        const port = host.Address().port
-        const shell = await fixture.Fetch(port,'/app/t1/shop/')
-        assert.equal(shell.status, 200)
-        assert.ok(shell.body.includes('shell'))
-        assert.equal((await fixture.Fetch(port,'/app/t1/shop/assets/app.js')).body, ServeFixture.Script)
+        // Unguarded, `shop/../shop/2.0.0/ui/index.html` normalises to a real, servable file.
+        await fixture.SetLive('../shop/2.0.0')
+        assert.equal((await fixture.Fetch(host.Address().port,'/app/t1/shop/')).status, 404)
+        await fixture.SetLive('2.0.0')
+        assert.equal((await fixture.Fetch(host.Address().port,'/app/t1/shop/')).status, 200)
     }
     finally
     {
@@ -248,22 +313,30 @@ test('serving falls back to the legacy <app>/ui + <app>/application.json when <a
     }
 })
 
-test('a live pointer that is not a safe segment answers 404 even when an unguarded read would succeed', async () =>
+test('serving reads the live manifest from the registry and the assets from storage', async () =>
 {
-    const fixture = new ServeFixture()
-    fixture.WriteVersion('2.0.0')
-    const host = await fixture.Start(false)
+    const fixture = new DirectServeFixture()
+    const serving = await AppServingHarness.Start(DirectServeFixture.Environment, { AppsStorage: () => fixture.Storage, Applications: () => fixture.Registry })
     try
     {
-        // Unguarded, `shop/../shop/2.0.0/application.json` normalises to a real, servable manifest.
-        fixture.WriteLive('../shop/2.0.0')
-        assert.equal((await fixture.Fetch(host.Address().port,'/app/t1/shop/')).status, 404)
-        fixture.WriteLive('2.0.0')
-        assert.equal((await fixture.Fetch(host.Address().port,'/app/t1/shop/')).status, 200)
+        // Files on storage alone serve nothing: no version is committed (a stray manifest file is never read).
+        fixture.Write('1.0.0', { 'ui/index.html': 'shell-1', 'ui/extra.js': 'extra-1', 'application.json': JSON.stringify(DirectServeFixture.Manifest('1.0.0', ['extra.js'])) })
+        assert.equal((await serving.Get(DirectServeFixture.Route)).status, 404)
+        await fixture.Registry.Commit(DirectServeFixture.Manifest('1.0.0', ['app.js']))
+        fixture.Write('1.0.0', { 'ui/app.js': 'app-1' })
+        assert.equal((await serving.Get(DirectServeFixture.Route)).body, 'shell-1')
+        assert.equal((await serving.Get(DirectServeFixture.Route + 'app.js')).body, 'app-1', 'an asset the registry manifest lists is served from storage')
+        assert.equal((await serving.Get(DirectServeFixture.Route + 'extra.js')).status, 404, 'an asset only the stray file lists is not')
+        // Committing 2.0.0 moves live: the next request serves its files, with no pointer file anywhere.
+        fixture.Write('2.0.0', { 'ui/index.html': 'shell-2', 'ui/app.js': 'app-2' })
+        await fixture.Registry.Commit(DirectServeFixture.Manifest('2.0.0', ['app.js']))
+        assert.equal((await serving.Get(DirectServeFixture.Route)).body, 'shell-2')
+        assert.equal((await serving.Get(DirectServeFixture.Route + 'app.js')).body, 'app-2')
+        assert.equal((await serving.Get('/app/other/shop/')).status, 404)
     }
     finally
     {
-        await host.DisposeAsync()
+        await serving.Dispose()
         fixture.Dispose()
     }
 })

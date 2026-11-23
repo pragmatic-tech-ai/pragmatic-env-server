@@ -16,6 +16,7 @@ import { ServerConnectionHandler } from '../server-connection-handler.js'
 import { PageFingerprint } from '../paging/page-request.js'
 import { CypherParamConverter } from '../cypher/cypher-param-converter.js'
 import { PpSecurityHarness } from '../cypher/tests/pp-security-harness.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 /** One open solution holding three models (A, B, C), served through real handlers for chosen principals. */
 class ModelScopedWorld
@@ -80,7 +81,6 @@ class ModelScopedFixture
     public static readonly LabelQuery = 'MATCH (w:Widget) RETURN w.label AS label ORDER BY label'
     private static readonly SolutionPrefix = 'cms-sol-'
     private static readonly PackagesPrefix = 'cms-pkgs-'
-    private static readonly IdentityPrefix = 'cms-id-'
     private static readonly ModelFile = join('models', 'model.todl')
     private static readonly Namespace = 'acme'
     private static readonly RootUnitName = 'Root'
@@ -135,13 +135,12 @@ class ModelScopedFixture
     {
         const solution = mkdtempSync(join(tmpdir(), ModelScopedFixture.SolutionPrefix))
         const packages = mkdtempSync(join(tmpdir(), ModelScopedFixture.PackagesPrefix))
-        const identityRoot = mkdtempSync(join(tmpdir(), ModelScopedFixture.IdentityPrefix))
         cpSync(join(import.meta.dirname, '..', '..', 'tests', 'fixtures', 'sample-solution'), solution, { recursive: true })
         writeFileSync(join(solution, ModelScopedFixture.ModelFile), ModelScopedFixture.ModelTodl())
         PpSecurityHarness.SetKey()
         const server = identityOn
-            ? new PragmaticServer({ packagesRoot: packages, identity: PpSecurityHarness.Identity(identityRoot) })
-            : new PragmaticServer({ packagesRoot: packages })
+            ? new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages, identity: PpSecurityHarness.Identity() })
+            : new PragmaticServer({ platform: CustomPlatformFixture.Mem(), environmentId: CustomPlatformFixture.EnvironmentId, packagesRoot: packages })
         await server.Start()
         await server.OpenSolution(solution)
         if (identityOn)
@@ -165,7 +164,6 @@ class ModelScopedFixture
             PpSecurityHarness.ClearKey()
             rmSync(solution, { recursive: true, force: true })
             rmSync(packages, { recursive: true, force: true })
-            rmSync(identityRoot, { recursive: true, force: true })
         }
     }
 

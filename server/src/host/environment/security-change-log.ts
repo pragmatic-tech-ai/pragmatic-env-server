@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto'
-import type { IStorage } from '@pragmatic-tech-ai/todl-runtime'
 import type { SecurityChangesDto } from '@pragmatic-tech-ai/pragmatic-protocol'
 import { StructuredLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
-import { AsyncMutex } from '../cypher/async-mutex.js'
+import type { EnvironmentRecords } from '../../storage/environment-records.js'
 
-/** Where the change log reports what it never throws: a malformed file and an append that did not land. */
+/** The environment's one record in the security change log registry. */
+export type SecurityChangeLogRecord = { id: string; entries: SecurityChangesDto[] }
+
+/** Where the change log reports what it never throws: a malformed record and an append that did not land. */
 export interface ISecurityChangeLogDiagnostics
 {
     Unreadable(error: unknown): void
@@ -52,79 +53,58 @@ class MalformedSecurityChangeLogError extends Error
 }
 
 /**
- * The environment's security change log (S4 Task 13, PR14): `graphs/security-changes.json`, the security changes of
- * the last `MaxEntries` deploys and promotes that changed any, newest first, for tenant-admin's change log. `Append`
- * is called with a non-empty diff only; it rewrites the file atomically (temp file + rename, the temp removed when the
- * rename fails), appends one at a time, and drops the oldest entries beyond `MaxEntries`. The log is a record, never
- * a gate: a malformed file lists as empty (reported), and an append that fails (including a storage read error,
- * which never overwrites the history) is reported, not thrown (a deploy whose setting is already pruned is not failed
- * by its log). Survives a restart.
+ * The environment's security change log (S4 Task 13, PR14): one record in the env server database (registry
+ * `env_security_changes`, A5), the security changes of the last `MaxEntries` deploys and promotes that changed any, newest
+ * first, for tenant-admin's change log. `Append` is called with a non-empty diff only; it prepends through the record
+ * store's optimistic Update (so concurrent appends from several workers all land) and drops the oldest entries beyond
+ * `MaxEntries`. The log is a record, never a gate: a malformed record lists as empty (reported), and an append that fails
+ * (including a database error, which never overwrites the history) is reported, not thrown (a deploy whose setting is
+ * already pruned is not failed by its log). Survives a restart.
  */
 export class SecurityChangeLog
 {
-    public static readonly FileName = 'security-changes.json'
     public static readonly MaxEntries = 50
-    private static readonly TempPrefix = '.security-changes-'
-    private static readonly TempSuffix = '.tmp'
+    /** The key of the environment's one log record. */
+    public static readonly RecordKey = 'log'
 
-    private readonly mutex = new AsyncMutex()
-
-    public constructor(private readonly storage: IStorage, private readonly diagnostics: ISecurityChangeLogDiagnostics = new LoggerSecurityChangeLogDiagnostics())
+    public constructor(private readonly records: EnvironmentRecords<SecurityChangeLogRecord>, private readonly diagnostics: ISecurityChangeLogDiagnostics = new LoggerSecurityChangeLogDiagnostics())
     {
     }
 
     /** Prepends `entry`; a failure is reported (AppendFailed), never thrown. */
-    public Append(entry: SecurityChangesDto): Promise<void>
+    public async Append(entry: SecurityChangesDto): Promise<void>
     {
-        return this.mutex.Run(async () =>
+        try
         {
-            try
-            {
-                await this.Write([entry, ...(await this.List())].slice(0, SecurityChangeLog.MaxEntries))
-            }
-            catch (error)
-            {
-                this.diagnostics.AppendFailed(error)
-            }
-        })
+            await this.records.Update(SecurityChangeLog.RecordKey, current => ({ id: SecurityChangeLog.RecordKey, entries: [entry, ...this.EntriesOf(current)].slice(0, SecurityChangeLog.MaxEntries) }))
+        }
+        catch (error)
+        {
+            this.diagnostics.AppendFailed(error)
+        }
     }
 
     /**
-     * The logged changes, newest first; empty when nothing was ever logged or the stored content is malformed
-     * (reported). A storage read error propagates, so `Append` reports it instead of overwriting the history.
+     * The logged changes, newest first; empty when nothing was ever logged or the stored record is malformed
+     * (reported). A database read error propagates.
      */
     public async List(): Promise<SecurityChangesDto[]>
     {
-        if (!(await this.storage.Exists(SecurityChangeLog.FileName)))
-        {
-            return []
-        }
-        const text = await this.storage.ReadText(SecurityChangeLog.FileName)
-        try
-        {
-            const entries: unknown = JSON.parse(text)
-            if (!Array.isArray(entries)) throw new MalformedSecurityChangeLogError()
-            return entries as SecurityChangesDto[]
-        }
-        catch (error)
-        {
-            this.diagnostics.Unreadable(error)
-            return []
-        }
+        return this.EntriesOf(await this.records.Get(SecurityChangeLog.RecordKey))
     }
 
-    private async Write(entries: readonly SecurityChangesDto[]): Promise<void>
+    /** The record's entries; a malformed record is reported and reads as empty (the next append replaces it). */
+    private EntriesOf(record: SecurityChangeLogRecord | undefined): SecurityChangesDto[]
     {
-        const temp = SecurityChangeLog.TempPrefix + randomUUID() + SecurityChangeLog.TempSuffix
-        try
+        if (record === undefined)
         {
-            await this.storage.WriteText(temp, JSON.stringify(entries, null, 2))
-            await this.storage.Rename(temp, SecurityChangeLog.FileName)
+            return []
         }
-        catch (error)
+        if (!Array.isArray(record.entries))
         {
-            await this.storage.Delete(temp).catch(() => undefined)
-            throw error
+            this.diagnostics.Unreadable(new MalformedSecurityChangeLogError())
+            return []
         }
+        return record.entries
     }
 }

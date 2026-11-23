@@ -109,7 +109,7 @@ class DeliveryFx
             {
                 await fx.Package(ref.id, ref.version, todl)
             }
-            fx.Live(DeliveryFx.App, DeliveryFx.V1, [DeliveryFx.Hr1, DeliveryFx.Crm1])
+            await fx.Live(DeliveryFx.App, DeliveryFx.V1, [DeliveryFx.Hr1, DeliveryFx.Crm1])
             const server = await fx.Start({ Identity: true, SecurityModel: DeliveryFx.Setting() })
             await server.EnvironmentEngine().Engine()
             await body(fx, server)
@@ -306,7 +306,7 @@ describe('delivery security (S4 Task 13)', () =>
             const change = { Channel: DeliveryChannel.Deploy, Name: DeliveryFx.App, Packages: [DeliveryFx.Hr2, DeliveryFx.Crm2].map(ref => ({ model: ref.id, version: ref.version })), Version: DeliveryFx.V2 }
             await assert.rejects(server.EnvironmentEngine().Deliver(change, async () =>
             {
-                fx.Live(DeliveryFx.App, DeliveryFx.V2, [DeliveryFx.Hr2, DeliveryFx.Crm2])
+                await fx.Live(DeliveryFx.App, DeliveryFx.V2, [DeliveryFx.Hr2, DeliveryFx.Crm2])
                 throw new Error(DeliveryFx.Crash)
             }), new RegExp(DeliveryFx.Crash))
             const next = await fx.Restart({ Identity: true })
@@ -335,7 +335,7 @@ describe('delivery security (S4 Task 13)', () =>
             // v2 drops hr.Review and Reviewer; the save is checked against v1, which still runs, and lands mid-persist
             await server.EnvironmentEngine().Deliver(change, async () =>
             {
-                fx.Live(DeliveryFx.App, DeliveryFx.V2, [DeliveryFx.Hr2, DeliveryFx.Crm1])
+                await fx.Live(DeliveryFx.App, DeliveryFx.V2, [DeliveryFx.Hr2, DeliveryFx.Crm1])
                 await admin.SetSecurityModel(Tier1Fx.Admin, withLate)
             })
             assert.deepEqual((await DeliveryFx.Stored(server))?.roleOverrides, [], 'the commit pruned the override saved during the persist')

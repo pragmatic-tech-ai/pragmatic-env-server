@@ -4,6 +4,7 @@ import { request } from 'node:http'
 import { PragmaticServerHost } from '../pragmatic-server-host.js'
 import { InMemoryEnvironmentProvisioning } from '../../environments/environment-registry.js'
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Probe
 {
@@ -45,7 +46,7 @@ class Probe
 test('readyz is 200 after a clean start and healthz is 200', async () =>
 {
     const provisioning = new InMemoryEnvironmentProvisioning(new Map<string, EnvironmentProvisioning>())
-    const host = await PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir: 'C:/tmp/ro-test', masterKey: { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir: 'C:/tmp/ro-test', masterKey: { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning })
     try
     {
         assert.equal(await Probe.Get(host.Address().port, '/readyz'), 200)
@@ -60,7 +61,7 @@ test('readyz is 200 after a clean start and healthz is 200', async () =>
 test('an upgrade for an owned-elsewhere environment is rejected with a retryable 503', async () =>
 {
     const provisioning = new InMemoryEnvironmentProvisioning(new Map<string, EnvironmentProvisioning>([['acme', { displayName: 'Acme' }]]))
-    const host = await PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir: 'C:/tmp/ro-test', masterKey: { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir: 'C:/tmp/ro-test', masterKey: { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning })
     try
     {
         host.RegistryForTest().SetOwnershipForTest(false)
@@ -75,7 +76,7 @@ test('an upgrade for an owned-elsewhere environment is rejected with a retryable
 test('readyz is 503 when ownership is unhealthy (Redis-down fail-closed)', async () =>
 {
     const provisioning = new InMemoryEnvironmentProvisioning(new Map<string, EnvironmentProvisioning>())
-    const host = await PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir: 'C:/tmp/ro-test', masterKey: { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir: 'C:/tmp/ro-test', masterKey: { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning })
     try
     {
         host.RegistryForTest().SetOwnershipForTest(true, false)
@@ -91,7 +92,7 @@ test('readyz is 503 when ownership is unhealthy (Redis-down fail-closed)', async
 test('an HTTP request for an owned-elsewhere environment returns a retryable 503', async () =>
 {
     const provisioning = new InMemoryEnvironmentProvisioning(new Map<string, EnvironmentProvisioning>([['acme', { displayName: 'Acme' }]]))
-    const host = await PragmaticServerHost.StartAsync({ host: '127.0.0.1', port: 0, baseDir: 'C:/tmp/ro-test', masterKey: { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning })
+    const host = await PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: '127.0.0.1', port: 0, baseDir: 'C:/tmp/ro-test', masterKey: { base64Env: 'PRAGMATIC_MASTER_KEY' }, provisioning })
     try
     {
         host.RegistryForTest().SetOwnershipForTest(false)

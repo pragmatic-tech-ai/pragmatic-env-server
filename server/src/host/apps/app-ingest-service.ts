@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { DeliveryChannel, EnvironmentCatalogError, SystemNames } from '@pragmatic-tech-ai/todl/engine'
 import { AppWriteStatus, type AppDeployResultDto, type CypherAppDeployParamsDto } from '@pragmatic-tech-ai/pragmatic-protocol'
 import { PragmaticAppsRegistry } from './pragmatic-apps-registry.js'
+import type { PragmaticAppManifest } from './pragmatic-app-manifest.js'
 import { EnvironmentUpgradeFailedError } from '../environment/environment-engine-host.js'
 import type { DeliveryChange, IDeliveryGate } from '../environment/environment-deliveries.js'
 import { NullLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
@@ -31,16 +32,17 @@ interface PlannedFile
 interface IngestPlan
 {
     files: PlannedFile[]
-    marker: PlannedFile
+    /** The version's manifest, as the registry stores it (the commit). */
+    manifest: PragmaticAppManifest
 }
 
 /**
- * Ingests a published remote application onto a runtime environment. The storages are bound to the per-environment
- * `PragmaticServer`, so ingest is already environment-scoped. Everything is validated before the first byte is written;
- * an already-present `name@version` is refused (versions are immutable), package and UI files are staged under
- * unique temp names and renamed into place, and `application.json` is renamed in LAST as the commit marker, so a
- * version tree is never treated as complete while half-ingested. The `<app>/live` pointer, written after the tree, is the app-level
- * gate: until it names a version the app serves the previous one.
+ * Ingests a published remote application onto a runtime environment. The storages and the registry are bound to the
+ * per-environment `PragmaticServer`, so ingest is already environment-scoped. Everything is validated before the first
+ * byte is written; an already-live `name@version` is refused (versions are immutable), package and UI files are staged
+ * under unique temp names and renamed into place, and the registry's `Commit` (one database write adding the version's
+ * manifest and moving the live pointer to it, A5) comes LAST, so a version is never served while half-ingested: until
+ * the commit the app serves the previous live version.
  *
  * Ruling S4: the packages are stored first (immutable), then the deploy is handed to the environment's delivery gate,
  * which composes every live app plus this one over the stored packages BEFORE anything else is written: a composition
@@ -48,22 +50,27 @@ interface IngestPlan
  * bindings, ...) answers `invalid` with its message, and neither the version tree nor the pointer is written. Only a
  * set that composes commits the version tree and the pointer (the gate's persist step), after which the gate upgrades
  * the environment engine; an upgrade that fails then answers `failed` with EnvironmentUpgradeFailedError's reason (the
- * app is live; the engine retries on next use). A hard crash mid-commit can still leave
- * non-servable orphan files (no `application.json` in the version tree means the version is incomplete and never
- * made live). A same-version retry whose tree is complete but whose pointer is not yet written only rewrites the pointer.
+ * app is live; the engine retries on next use). A crash between the UI files and the commit leaves non-servable orphan
+ * files (no manifest in the registry: the version was never made live), which a retry overwrites. Redeploying a version
+ * that was committed earlier but is not live now (another version went live since) with byte-identical content only
+ * moves the live pointer back to it.
  * Concurrent ingests of one app are serialized per app (the lock does NOT serialize shared-package writes across DIFFERENT apps: a pathological
  * cross-app race on the same package id@version is acceptable for SP0). Client paths are never trusted.
  *
- * Layout: UI assets and application.json are version-scoped (`<app>/<version>/ui/...`, `<app>/<version>/application.json`),
- * so a new version never touches an earlier tree. After the version tree is committed, the small pointer file
- * `<app>/live` (the version string) is overwritten: that write is the atomic app-level switch. Request size is bounded by the wire frame limit (acceptable for SP0).
+ * Layout: UI assets are version-scoped in the applications storage (`<app>/<version>/ui/...`), so a new version never
+ * touches an earlier tree; manifests and the live pointer are the app's record in the registry. Request size is bounded
+ * by the wire frame limit (acceptable for SP0).
  */
 export class AppIngestService
 {
-    private static readonly ManifestFile = 'application.json'
     private static readonly ModelFile = 'model.json'
+    private static readonly ArrayOpen = '['
+    private static readonly ArrayClose = ']'
+    private static readonly ObjectOpen = '{'
+    private static readonly ObjectClose = '}'
+    private static readonly JsonComma = ','
+    private static readonly JsonColon = ':'
     private static readonly UiDir = 'ui'
-    private static readonly LivePointerFile = 'live'
     private static readonly ReservedVersions: ReadonlySet<string> = new Set(['live', 'ui', 'application.json'])
     private static readonly ReservedVersionMessage = 'this application version name is reserved'
     private static readonly Separator = '/'
@@ -99,18 +106,10 @@ export class AppIngestService
     private static readonly ErrorCodeField = 'errorCode'
     private static readonly UnknownClass = 'unknown'
 
-    private readonly packages: IStorage
-    private readonly applications: IStorage
-    private readonly gate: IDeliveryGate
-    private readonly logger: ILogger
     private readonly locks = new Map<string, Promise<unknown>>()
 
-    public constructor(packages: IStorage, applications: IStorage, gate: IDeliveryGate, logger: ILogger = new NullLogger())
+    public constructor(private readonly packages: IStorage, private readonly applications: IStorage, private readonly registry: PragmaticAppsRegistry, private readonly gate: IDeliveryGate, private readonly logger: ILogger = new NullLogger())
     {
-        this.logger = logger
-        this.packages = packages
-        this.applications = applications
-        this.gate = gate
     }
 
     public async Ingest(params: CypherAppDeployParamsDto): Promise<AppDeployResultDto>
@@ -140,10 +139,10 @@ export class AppIngestService
                 {
                     if (!resume)
                     {
-                        await this.Commit([...plan.files.filter(file => file.storage === this.applications), plan.marker])
+                        await this.Commit(plan.files.filter(file => file.storage === this.applications))
                     }
-                    // The final commit point: the whole version tree is in place, so atomically repoint the app at it.
-                    await this.applications.WriteText([appName, AppIngestService.LivePointerFile].join(AppIngestService.Separator), appVersion)
+                    // The commit: the UI tree is in place, so add the manifest and move the live pointer in one write.
+                    await this.registry.Commit(plan.manifest)
                 })
                 const applied: AppDeployResultDto = { status: AppWriteStatus.Applied, appName, appVersion }
                 return delivered.SecurityChanges === undefined ? applied : { ...applied, securityChanges: delivered.SecurityChanges }
@@ -222,38 +221,25 @@ export class AppIngestService
     }
 
     /**
-     * Versions are immutable: refuse an already-deployed name@version and a package version whose content differs; marks
-     * already-stored packages skip. True when this is a resume (the complete version tree is stored, not yet live).
+     * Versions are immutable: refuse an already-live name@version and a package version whose content differs; marks
+     * already-stored packages skip. True when this is a resume (the version was committed before, another one is live).
      */
     private async AssertImmutable(plan: IngestPlan, params: CypherAppDeployParamsDto): Promise<boolean>
     {
         let resume = false
-        if (await this.applications.Exists(plan.marker.path))
+        const stored = await this.registry.ManifestOf(params.appName, params.appVersion)
+        if (stored !== undefined)
         {
-            let existing: unknown
-            try
+            if (await this.registry.LiveVersion(params.appName) === params.appVersion)
             {
-                existing = JSON.parse(await this.applications.ReadText(plan.marker.path))
+                throw new IngestRejection(AppWriteStatus.Conflict, AppIngestService.VersionExistsMessage)
             }
-            catch
+            // Immutability: a resume is only an idempotent redeploy of byte-identical content, never a silent replacement.
+            if (!await this.MatchesStored(plan, stored))
             {
-                existing = undefined
+                throw new IngestRejection(AppWriteStatus.Conflict, AppIngestService.VersionExistsMessage)
             }
-            if ((existing as { version?: unknown } | undefined)?.version === params.appVersion)
-            {
-                // The marker is renamed in last, so the tree is complete. If the pointer does not yet name this version, a
-                // previous deploy failed at the pointer write: resume by only (re)writing the pointer. Else it is live: Conflict.
-                if (await this.LiveVersion(params.appName) === params.appVersion)
-                {
-                    throw new IngestRejection(AppWriteStatus.Conflict, AppIngestService.VersionExistsMessage)
-                }
-                // Immutability: a resume is only an idempotent redeploy of byte-identical content, never a silent replacement.
-                if (!await this.MatchesStored(plan))
-                {
-                    throw new IngestRejection(AppWriteStatus.Conflict, AppIngestService.VersionExistsMessage)
-                }
-                resume = true
-            }
+            resume = true
         }
         // Stored packages are marked skip (a resume included: MatchesStored tolerates a package not yet written, which
         // the package commit then writes, so the gate can compose over it).
@@ -272,10 +258,15 @@ export class AppIngestService
         return resume
     }
 
-    /** True when the marker and every UI file are byte-identical to what is stored, and no already-stored package file differs. */
-    private async MatchesStored(plan: IngestPlan): Promise<boolean>
+    /** True when the stored manifest equals the planned one, every UI file is byte-identical to what is stored, and no
+     *  already-stored package file differs. */
+    private async MatchesStored(plan: IngestPlan, stored: PragmaticAppManifest): Promise<boolean>
     {
-        for (const file of [plan.marker, ...plan.files.filter(f => f.storage === this.applications)])
+        if (AppIngestService.Canonical(stored) !== AppIngestService.Canonical(plan.manifest))
+        {
+            return false
+        }
+        for (const file of plan.files.filter(f => f.storage === this.applications))
         {
             if (!await this.applications.Exists(file.path)
                 || Buffer.compare(Buffer.from(await this.applications.ReadBytes(file.path)), Buffer.from(file.bytes)) !== 0)
@@ -295,18 +286,19 @@ export class AppIngestService
         return true
     }
 
-    /** The version `<app>/live` names, or undefined when the pointer is absent or unreadable. */
-    private async LiveVersion(appName: string): Promise<string | undefined>
+    /** JSON with object keys sorted (the database's jsonb does not keep key order). */
+    private static Canonical(value: unknown): string
     {
-        const pointer = [appName, AppIngestService.LivePointerFile].join(AppIngestService.Separator)
-        try
+        if (Array.isArray(value))
         {
-            return await this.applications.Exists(pointer) ? (await this.applications.ReadText(pointer)).trim() : undefined
+            return AppIngestService.ArrayOpen + value.map(item => AppIngestService.Canonical(item)).join(AppIngestService.JsonComma) + AppIngestService.ArrayClose
         }
-        catch
+        if (value !== null && typeof value === 'object')
         {
-            return undefined
+            const entries = Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+            return AppIngestService.ObjectOpen + entries.map(([key, item]) => JSON.stringify(key) + AppIngestService.JsonColon + AppIngestService.Canonical(item)).join(AppIngestService.JsonComma) + AppIngestService.ObjectClose
         }
+        return JSON.stringify(value)
     }
 
     private Validate(params: CypherAppDeployParamsDto): IngestPlan
@@ -373,7 +365,7 @@ export class AppIngestService
             uiPaths.add(path)
             files.push({ storage: this.applications, path: [params.appName, params.appVersion, AppIngestService.UiDir, path].join(AppIngestService.Separator), bytes: Buffer.from(asset.contentBase64, AppIngestService.Base64Encoding) })
         }
-        const projection: Record<string, unknown> = {
+        const projection: PragmaticAppManifest = {
             name: manifest.name,
             version: manifest.version,
             packages: manifest.packages.map(ref => ({ id: ref.id, version: ref.version })),
@@ -391,12 +383,7 @@ export class AppIngestService
             }
             projection.ui = { entry: manifest.ui.entry, assets }
         }
-        const marker: PlannedFile = {
-            storage: this.applications,
-            path: [params.appName, params.appVersion, AppIngestService.ManifestFile].join(AppIngestService.Separator),
-            bytes: new TextEncoder().encode(JSON.stringify(projection)),
-        }
-        return { files, marker }
+        return { files, manifest: projection }
     }
 
     /** Stages `ordered` under temp names, then renames each into place in order; on failure removes only what it created. */

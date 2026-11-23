@@ -1,0 +1,14 @@
+{
+  "records": {
+    "TzTGA9ZIDUK9asjj189-JmrT2MpGGRqjVMaxdmjtZYE": {
+      "tokenRef": "acme-rt/svctok/TzTGA9ZIDUK9asjj189-JmrT2MpGGRqjVMaxdmjtZYE",
+      "principalId": "ci-bot",
+      "realmId": "acme-rt",
+      "scopes": [
+        "deploy"
+      ],
+      "expiresAt": null,
+      "revoked": false
+    }
+  }
+}

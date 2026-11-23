@@ -14,6 +14,7 @@ import { InMemoryEnvironmentProvisioning } from '../../environments/environment-
 import type { EnvironmentProvisioning } from '../../environments/environment-provisioning.js'
 import { Observability, ObservabilityRole, FileAccessAuditSink } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { StructuredLogger } from '@pragmatic-tech-ai/pragmatic-observability'
+import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
 
 class Soak
 {
@@ -157,7 +158,7 @@ class Soak
 
     public static StartHost(baseDir: string, keyPath: string, observability: Observability, audit: FileAccessAuditSink): Promise<PragmaticServerHost>
     {
-        return PragmaticServerHost.StartAsync({ host: Soak.LocalHost, port: 0, baseDir, masterKey: { keyFilePath: keyPath }, provisioning: Soak.Provisioning(), observability, audit, drainTimeoutMs: Soak.HostDrainTimeoutMs })
+        return PragmaticServerHost.StartAsync({ platform: CustomPlatformFixture.Mem(), host: Soak.LocalHost, port: 0, baseDir, masterKey: { keyFilePath: keyPath }, provisioning: Soak.Provisioning(), observability, audit, drainTimeoutMs: Soak.HostDrainTimeoutMs })
     }
 
     /** Bounded poll: waits for the live-handler count to reach zero, returning the last observed count. */
