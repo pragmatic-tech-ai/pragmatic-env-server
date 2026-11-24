@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -89,6 +89,7 @@ class FailingOnceImport extends EnvServerImport
 
 SqlTestSessions.Describe('EnvServerImport', (makeSession, label) =>
 {
+    const live = label.endsWith('[live]')
     describe(label, () =>
     {
         it('imports the golden fixture and the counts match', async () =>
@@ -158,10 +159,25 @@ SqlTestSessions.Describe('EnvServerImport', (makeSession, label) =>
             const database = EnvServerDatabase.Over(await makeSession())
             const baseDir = ImportFixture.BaseDir()
             const failing = new FailingOnceImport(database, new NodeFsStorage(baseDir), ImportFixture.Key)
-            await assert.rejects(failing.ImportIfPending(), /injected failure/)
+            // One environment's failure is reported and the start goes on (only that environment stays pending).
+            const failed = await failing.ImportIfPending()
+            assert.deepEqual(failed?.ToJson().environments, [ImportFixture.Dev])
+            assert.deepEqual(failed?.ToJson().failed, [ImportFixture.Runtime + ': Error'])
+            assert.ok(failed?.Failed.every(line => !line.includes('injected')), 'the error name only, never its message')
+            assert.equal(await failing.IsPending(ImportFixture.Runtime), true)
+            assert.equal(await failing.IsPending(ImportFixture.Dev), false)
             const state = await database.Records<{ id: string }>(EnvServerRegistry.Import)
             assert.ok(await state.Get(EnvServerImport.StatePrefix + ImportFixture.Dev) !== undefined, 'the environment before the failure finished')
             assert.equal(await state.Get(EnvServerImport.StatePrefix + ImportFixture.Runtime), undefined, 'no completion record for the failed one')
+            if (live)
+            {
+                // Rolled back (Postgres; pg-mem does not roll back): nothing of the failed environment's steps before the failure stayed.
+                const realm = ImportFixture.Realm(ImportFixture.Runtime)
+                const set = await SqlIdentityStoreSet.Open(database.Session)
+                assert.equal((await set.For(ImportFixture.Runtime, await database.Secrets(ImportFixture.Runtime, ImportFixture.Key)).Accounts.ListAccounts(realm)).length, 0, 'no accounts')
+                assert.equal(await ImportFixture.AuditRows(database, ImportFixture.Runtime), 0, 'no audit rows')
+                assert.equal(await new EnvironmentRecords<SecurityChangeLogRecord>(database, EnvServerRegistry.SecurityChanges, ImportFixture.Runtime).Get(SecurityChangeLog.RecordKey), undefined, 'no security change log')
+            }
             const report = await failing.ImportIfPending()
             assert.deepEqual(report?.ToJson().environments, [ImportFixture.Runtime])
             assert.ok(await state.Get(EnvServerImport.StatePrefix + ImportFixture.Runtime) !== undefined)
@@ -170,6 +186,66 @@ SqlTestSessions.Describe('EnvServerImport', (makeSession, label) =>
             const realm = ImportFixture.Realm(ImportFixture.Runtime)
             const set = await SqlIdentityStoreSet.Open(database.Session)
             assert.equal((await set.For(ImportFixture.Runtime, await database.Secrets(ImportFixture.Runtime, ImportFixture.Key)).Accounts.ListAccounts(realm)).length, 2, 'accounts not duplicated')
+        })
+
+        it('the CLI run stops at the first failing environment (it is not a start)', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            await assert.rejects(new FailingOnceImport(database, new NodeFsStorage(ImportFixture.BaseDir()), ImportFixture.Key).Run(false), /injected failure/)
+        })
+
+        it('imports only the environment\'s own realm: tokens, grants and realm configurations of another realm are skipped', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const baseDir = ImportFixture.BaseDir()
+            const identity = join(baseDir, ImportFixture.Dev, 'identity')
+            const grants = JSON.parse(readFileSync(join(identity, 'grants.json'), 'utf8')) as { grants: Record<string, unknown>[] }
+            grants.grants.push({ subject: 'mallory', role: 3, resourceKind: 0, resourceRealmId: ImportFixture.Runtime, resourcePath: [] })
+            writeFileSync(join(identity, 'grants.json'), JSON.stringify(grants))
+            const tokens = JSON.parse(readFileSync(join(identity, 'service-tokens.json'), 'utf8')) as { records: Record<string, Record<string, unknown>> }
+            tokens.records['other-realm-hash'] = { tokenRef: 'acme-rt/svctok/other', principalId: 'mallory-bot', realmId: ImportFixture.Runtime, scopes: ['deploy'], expiresAt: null, revoked: false }
+            writeFileSync(join(identity, 'service-tokens.json'), JSON.stringify(tokens))
+            const configs = JSON.parse(readFileSync(join(identity, 'realm-config.json'), 'utf8')) as { configs: Record<string, Record<string, unknown>> }
+            const runtimeConfig = { ...configs.configs[ImportFixture.Dev]!, providerSettings: [['issuer', 'https://evil.example']] }
+            configs.configs[ImportFixture.Runtime] = runtimeConfig
+            writeFileSync(join(identity, 'realm-config.json'), JSON.stringify(configs))
+            // acme-dev is imported alone first, so acme-rt's own files cannot mask what acme-dev's would write there.
+            rmSync(join(baseDir, ImportFixture.Runtime), { recursive: true })
+            const report = await new EnvServerImport(database, new NodeFsStorage(baseDir), ImportFixture.Key).ImportIfPending()
+            assert.equal(report?.CountOf(ImportFixture.Dev, 'grants'), 2)
+            assert.equal(report?.CountOf(ImportFixture.Dev, 'service_tokens'), 1)
+            assert.equal(report?.CountOf(ImportFixture.Dev, 'realm_configs'), 1)
+            assert.ok(report?.Skipped.some(line => line.startsWith(ImportFixture.Dev + ': grant not imported (on another realm): mallory')))
+            assert.ok(report?.Skipped.some(line => line.startsWith(ImportFixture.Dev + ': service token not imported (another realm)')))
+            assert.ok(report?.Skipped.some(line => line === ImportFixture.Dev + ': realm config not imported (another realm): ' + ImportFixture.Runtime))
+            const set = await SqlIdentityStoreSet.Open(database.Session)
+            const runtime = set.For(ImportFixture.Runtime, await database.Secrets(ImportFixture.Runtime, ImportFixture.Key))
+            const realm = ImportFixture.Realm(ImportFixture.Runtime)
+            assert.deepEqual(await runtime.Grants.GrantsFor('mallory', realm), [], 'acme-rt holds no grant from acme-dev\'s files')
+            assert.deepEqual(await runtime.Tokens.List(realm), [], 'acme-rt holds no token from acme-dev\'s files')
+            assert.equal(await set.RealmConfig().Get(ImportFixture.Runtime), null, 'acme-rt holds no realm configuration from acme-dev\'s files')
+        })
+
+        it('skips dot-led folders at the base (the server database\'s .postgres data) and a missing base folder', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const baseDir = ImportFixture.BaseDir()
+            cpSync(join(baseDir, ImportFixture.Dev), join(baseDir, '.postgres'), { recursive: true })
+            const importer = new EnvServerImport(database, new NodeFsStorage(baseDir), ImportFixture.Key)
+            assert.deepEqual(await importer.EnvironmentsWithFiles(), [ImportFixture.Dev, ImportFixture.Runtime])
+            assert.equal(await importer.IsPending('.postgres'), false)
+            const missing = join(mkdtempSync(join(tmpdir(), 'env-import-missing-')), 'absent')
+            assert.equal(await new EnvServerImport(database, new NodeFsStorage(missing), ImportFixture.Key).ImportIfPending(), undefined)
+        })
+
+        it('application handoff files alone (the unpacker\'s, written after A5 too) do not make an environment pending', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const baseDir = mkdtempSync(join(tmpdir(), 'env-import-apps-'))
+            cpSync(join(ImportFixture.Golden, ImportFixture.Runtime, 'applications'), join(baseDir, 'fresh', 'applications'), { recursive: true })
+            const importer = new EnvServerImport(database, new NodeFsStorage(baseDir), ImportFixture.Key)
+            assert.equal(await importer.IsPending('fresh'), false)
+            assert.equal(await importer.ImportIfPending(), undefined)
         })
 
         it('secrets open under the new scope', async () =>
@@ -266,5 +342,32 @@ SqlTestSessions.Describe('EnvServerImport', (makeSession, label) =>
             assert.equal(report?.CountOf(ImportFixture.Dev, 'secrets'), 2)
             assert.equal(report?.CountOf(ImportFixture.Runtime, 'applications'), 2)
         })
+    })
+})
+
+SqlTestSessions.DescribeLive('EnvServerImport', makeDatabase =>
+{
+    it('two replicas starting together import once: the one that waited for the lock writes and reports nothing [live]', async () =>
+    {
+        const live = await makeDatabase()
+        try
+        {
+            const baseDir = ImportFixture.BaseDir()
+            const reports = await Promise.all([1, 2].map(() => new EnvServerImport(EnvServerDatabase.Over(live.Session()), new NodeFsStorage(baseDir), ImportFixture.Key).ImportIfPending()))
+            const database = EnvServerDatabase.Over(live.Session())
+            const environments = reports.flatMap(report => report?.Environments ?? []).sort()
+            assert.deepEqual(environments, [ImportFixture.Dev, ImportFixture.Runtime], 'each environment reported once')
+            const state = await database.Records<{ id: string; importedAt: string }>(EnvServerRegistry.Import)
+            const importedAt = (await state.Get(EnvServerImport.StatePrefix + ImportFixture.Dev))?.importedAt
+            assert.ok(importedAt !== undefined)
+            assert.equal(await ImportFixture.AuditRows(database, ImportFixture.Dev), 3)
+            // A third start finds both finished and writes nothing.
+            assert.equal(await new EnvServerImport(database, new NodeFsStorage(baseDir), ImportFixture.Key).ImportIfPending(), undefined)
+            assert.equal((await state.Get(EnvServerImport.StatePrefix + ImportFixture.Dev))?.importedAt, importedAt, 'the completion record is not rewritten')
+        }
+        finally
+        {
+            await live.Dispose()
+        }
     })
 })

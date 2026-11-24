@@ -13,13 +13,23 @@ export class EnvServerStartImport
     private static readonly EventKey = 'event'
     private static readonly ImportEvent = 'pre-a5-import'
     private static readonly ReportKey = 'report'
+    private static readonly FailedLine = 'the pre-A5 import of some environments failed; they are not served until a start imports them'
 
     public static async Run(config: ServerConfig, platform: PlatformServices, logger: ILogger): Promise<EnvServerImportReport | undefined>
     {
         const report = await new EnvServerImport(platform.Database, platform.CreateStorage(config.baseDir), platform.ResolveMasterKey(config.masterKey)).ImportIfPending()
         if (report !== undefined)
         {
-            logger.Info(EnvServerStartImport.ImportedLine, { [EnvServerStartImport.EventKey]: EnvServerStartImport.ImportEvent, [EnvServerStartImport.ReportKey]: report.ToJson() })
+            const S = EnvServerStartImport
+            const fields = { [S.EventKey]: S.ImportEvent, [S.ReportKey]: report.ToJson() }
+            if (report.Failed.length > 0)
+            {
+                logger.Error(S.FailedLine, fields)
+            }
+            else
+            {
+                logger.Info(S.ImportedLine, fields)
+            }
         }
         return report
     }

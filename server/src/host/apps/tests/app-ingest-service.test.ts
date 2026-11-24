@@ -13,6 +13,7 @@ import { DeliveryChannel, EnvironmentCatalogError, EnvironmentCatalogErrorCode }
 import type { DeliveryChange, IDelivered, IDeliveryGate } from '../../environment/environment-deliveries.js'
 import { EnvironmentUpgradeFailedError } from '../../environment/environment-engine-host.js'
 import { PragmaticAppsRegistry, type ApplicationRecord } from '../pragmatic-apps-registry.js'
+import { ApplicationFiles } from '../application-files.js'
 import type { PragmaticAppManifest } from '../pragmatic-app-manifest.js'
 import { PragmaticServer } from '../../../pragmatic-server.js'
 import { EnvironmentPurpose } from '../../../environments/environment-purpose.js'
@@ -81,13 +82,13 @@ class CommitFailingRegistry extends PragmaticAppsRegistry
 
     public Fail = true
 
-    public override async Commit(manifest: PragmaticAppManifest): Promise<void>
+    public override async Commit(manifest: PragmaticAppManifest, digest?: string): Promise<void>
     {
         if (this.Fail)
         {
             throw new Error(CommitFailingRegistry.FailureMessage + IngestFixture.Secret)
         }
-        await super.Commit(manifest)
+        await super.Commit(manifest, digest)
     }
 }
 
@@ -101,10 +102,25 @@ class OrderingRegistry extends PragmaticAppsRegistry
         super(records)
     }
 
-    public override async Commit(manifest: PragmaticAppManifest): Promise<void>
+    public override async Commit(manifest: PragmaticAppManifest, digest?: string): Promise<void>
     {
         this.RenamedAtCommit = [...this.apps.Renamed]
-        await super.Commit(manifest)
+        await super.Commit(manifest, digest)
+    }
+}
+
+/** A registry that lets another writer commit `rival` (same name@version, other content) just before this one claims. */
+class RivalClaimRegistry extends PragmaticAppsRegistry
+{
+    public constructor(records: EnvironmentRecords<ApplicationRecord>, private readonly rival: () => Promise<void>)
+    {
+        super(records)
+    }
+
+    public override async Claim(manifest: PragmaticAppManifest, digest: string): Promise<void>
+    {
+        await this.rival()
+        await super.Claim(manifest, digest)
     }
 }
 
@@ -254,6 +270,46 @@ test('a valid deploy writes packages and UI assets, then commits the manifest an
         assert.equal(await fx.Registry.LiveVersion('shop'), '1.0.0')
         assert.equal((await new PragmaticAppsRegistry(IngestFixture.Records(fx.Database)).ApplicationFor('shop')).Manifest.version, '1.0.0', 'a fresh registry over the database reads it')
         assert.deepEqual(fx.Gate.Delivered, [{ Channel: DeliveryChannel.Deploy, Name: 'shop', Packages: [{ model: 'shop.core', version: '1.0.0' }], Version: '1.0.0' }])
+    })
+})
+
+test('a writer that committed the version first (another worker) wins: this ingest is a Conflict and writes no UI file', async () =>
+{
+    await IngestFixture.Run(async fx =>
+    {
+        const rival = { ...IngestFixture.Params().manifest, packages: [] }
+        const registry = new RivalClaimRegistry(IngestFixture.Records(fx.Database), () => new PragmaticAppsRegistry(IngestFixture.Records(fx.Database)).Commit(rival))
+        const service = new AppIngestService(fx.Packages, fx.Apps, registry, fx.Gate)
+        const result = await service.Ingest(IngestFixture.Params())
+        assert.equal(result.status, AppWriteStatus.Conflict, JSON.stringify(result))
+        assert.match(result.reason ?? '', /immutable/)
+        assert.deepEqual((await registry.ManifestOf('shop', '1.0.0'))?.packages, [], 'the winner\'s manifest stays')
+        assert.equal(existsSync(fx.UiFile('1.0.0', IngestFixture.Entry)), false, 'the loser wrote no UI file')
+    })
+})
+
+test('a failed UI write drops the claim, so a corrected retry of the version is not blocked', async () =>
+{
+    await IngestFixture.Run(async fx =>
+    {
+        const registry = new CommitFailingRegistry(IngestFixture.Records(fx.Database))
+        const service = new AppIngestService(fx.Packages, fx.Apps, registry, fx.Gate)
+        assert.equal((await service.Ingest(IngestFixture.Params())).status, AppWriteStatus.Failed)
+        assert.equal((await IngestFixture.Records(fx.Database).Get('shop'))?.claims, undefined, 'no claim left')
+        registry.Fail = false
+        assert.equal((await service.Ingest(IngestFixture.ParamsOf(IngestFixture.Version))).status, AppWriteStatus.Applied, 'other content of the same version')
+    })
+})
+
+test('an applied deploy is mirrored to the unpacker handoff files', async () =>
+{
+    await IngestFixture.Run(async fx =>
+    {
+        const registry = new PragmaticAppsRegistry(IngestFixture.Records(fx.Database), new ApplicationFiles(fx.Apps))
+        const service = new AppIngestService(fx.Packages, fx.Apps, registry, fx.Gate)
+        assert.equal((await service.Ingest(IngestFixture.Params())).status, AppWriteStatus.Applied)
+        assert.equal(readFileSync(join(fx.AppsDir, 'shop', 'live'), 'utf8'), '1.0.0')
+        assert.deepEqual(JSON.parse(readFileSync(join(fx.AppsDir, 'shop', '1.0.0', 'application.json'), 'utf8')), IngestFixture.Params().manifest)
     })
 })
 
@@ -746,6 +802,39 @@ SqlTestSessions.DescribeLive('AppIngestService', makeDatabase =>
                 {
                     assert.equal(readFileSync(fx.UiFile(version, IngestFixture.Entry), 'utf8'), IngestFixture.ShellOf(version))
                 }
+            }
+            finally
+            {
+                fx.Dispose()
+                await live.Dispose()
+            }
+        })
+
+        it('two ingests of one version with different content: exactly one lands, the other is a Conflict, the winner\'s shell serves [live]', async () =>
+        {
+            const live = await makeDatabase()
+            const fx = new IngestFixture()
+            try
+            {
+                const workers = [0, 1].map(() =>
+                {
+                    const registry = new PragmaticAppsRegistry(IngestFixture.Records(EnvServerDatabase.Over(live.Session())))
+                    return new AppIngestService(new NodeFsStorage(fx.PackagesDir), new NodeFsStorage(fx.AppsDir), registry, new RecordingGate())
+                })
+                const shells = ['<html>first</html>', '<html>second</html>']
+                const params = shells.map(shell =>
+                {
+                    const p = IngestFixture.Params()
+                    p.uiBundle[0]!.contentBase64 = Buffer.from(shell).toString('base64')
+                    return p
+                })
+                const results = await Promise.all(workers.map((service, i) => service.Ingest(params[i]!)))
+                assert.deepEqual(results.map(r => r.status).sort(), [AppWriteStatus.Applied, AppWriteStatus.Conflict].sort(), JSON.stringify(results))
+                const winner = results.findIndex(r => r.status === AppWriteStatus.Applied)
+                assert.equal(readFileSync(fx.UiFile(IngestFixture.Version, IngestFixture.Entry), 'utf8'), shells[winner], 'the served shell is the winner\'s')
+                const record = await IngestFixture.Records(EnvServerDatabase.Over(live.Session())).Get(IngestFixture.App)
+                assert.equal(record?.live, IngestFixture.Version)
+                assert.equal(record?.claims, undefined)
             }
             finally
             {

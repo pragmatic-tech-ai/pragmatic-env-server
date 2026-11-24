@@ -2,6 +2,30 @@ import type { SqlRecordStore } from '@pragmatic-tech-ai/pragmatic-realm-adapters
 import type { EnvServerDatabase } from './env-server-database.js'
 import type { EnvServerRegistry } from './env-server-registry.js'
 
+/** An environment id that cannot key records: empty, or holding the `/` the key prefix ends with. */
+export class EnvironmentIdInvalidError extends Error
+{
+    private static readonly ErrorName = 'EnvironmentIdInvalidError'
+    private static readonly Text = 'an environment id must be non-empty and hold no /'
+
+    public constructor()
+    {
+        super(EnvironmentIdInvalidError.Text)
+        this.name = EnvironmentIdInvalidError.ErrorName
+    }
+
+    /** Throws unless `environmentId` can prefix keys (`<environmentId>/<key>`) without colliding with another's. */
+    public static Assert(environmentId: string): void
+    {
+        if (environmentId === '' || environmentId.includes(EnvironmentIdInvalidError.Separator))
+        {
+            throw new EnvironmentIdInvalidError()
+        }
+    }
+
+    private static readonly Separator = '/'
+}
+
 /** An Update callback changed the record's key. */
 export class EnvironmentRecordKeyChangedError extends Error
 {
@@ -30,6 +54,7 @@ export class EnvironmentRecords<T extends { id: string }>
 
     public constructor(private readonly database: EnvServerDatabase, private readonly registry: EnvServerRegistry, environmentId: string)
     {
+        EnvironmentIdInvalidError.Assert(environmentId)
         this.prefix = environmentId + EnvironmentRecords.Separator
     }
 
@@ -50,7 +75,7 @@ export class EnvironmentRecords<T extends { id: string }>
     /** This environment's records, ordered by key. */
     public async List(): Promise<readonly T[]>
     {
-        return (await (await this.Store()).List()).filter(record => record.id.startsWith(this.prefix)).map(record => this.Out(record))
+        return (await (await this.Store()).ListPrefix(this.prefix)).map(record => this.Out(record))
     }
 
     public async Put(record: T): Promise<void>

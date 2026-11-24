@@ -34,6 +34,7 @@ import { DeliveryChannel, EnvironmentCatalogError } from '@pragmatic-tech-ai/tod
 import { DevCypherExecute, LoggerDevExecuteDiagnostics } from './host/engine/dev-cypher-execute.js'
 import { LoggerExecuteDiagnostics } from './host/engine/graph-cypher-execute.js'
 import { PragmaticAppsRegistry } from './host/apps/pragmatic-apps-registry.js'
+import { ApplicationFiles } from './host/apps/application-files.js'
 import { NullLogger, StructuredLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { AppIngestService } from './host/apps/app-ingest-service.js'
 import { DevGraphStore } from './host/graphs/dev-graph-store.js'
@@ -161,6 +162,9 @@ export class PragmaticServer implements IEnvironmentGraphHost
     private static readonly DefaultSolutionsDir = 'solutions'
     private static readonly ApplicationsRootRequiredError = 'applicationsRoot is required for a runtime environment'
     private static readonly ErrorSeparator = '; '
+    private static readonly UnpackedTakenLine = 'took the UI releases the unpacker made live into the env server database'
+    private static readonly UnpackedRefusedLine = 'refused unpacked UI releases: the version is committed with other content (versions are immutable)'
+    private static readonly ApplicationsField = 'applications'
 
     private static readonly SharingRequiresIdentityError = 'record sharing requires an identity subsystem'
     private static readonly AssignRequiresIdentityError = 'record assignment requires an identity subsystem'
@@ -271,6 +275,7 @@ export class PragmaticServer implements IEnvironmentGraphHost
         {
             throw new Error(errors.map(e => String(e)).join(PragmaticServer.ErrorSeparator))
         }
+        await this.TakeUnpackedApplications()
         if (this.identity !== undefined)
         {
             try
@@ -288,6 +293,28 @@ export class PragmaticServer implements IEnvironmentGraphHost
                 throw error
             }
             this.StartDirectorySync()
+        }
+    }
+
+    /** A serving environment takes the UI releases the in-cluster unpacker made live before it started (its init
+     *  container writes the handoff files, ApplicationFiles) into the database; a version committed with other content
+     *  is refused (versions are immutable) and logged. */
+    private async TakeUnpackedApplications(): Promise<void>
+    {
+        // A server composed without an environment id keeps no records (EnvironmentId refuses): nothing to take into them.
+        if (!this.ServesRuntime() || this.options.applicationsRoot === undefined || (this.options.identity?.environment.id ?? this.options.environmentId) === undefined)
+        {
+            return
+        }
+        const result = await this.Applications().TakeUnpacked()
+        const logger = this.options.logger ?? StructuredLogger.ToStdout()
+        if (result.Taken.length > 0)
+        {
+            logger.Info(PragmaticServer.UnpackedTakenLine, { [PragmaticServer.ApplicationsField]: result.Taken })
+        }
+        if (result.Refused.length > 0)
+        {
+            logger.Warn(PragmaticServer.UnpackedRefusedLine, { [PragmaticServer.ApplicationsField]: result.Refused })
         }
     }
 
@@ -796,7 +823,7 @@ export class PragmaticServer implements IEnvironmentGraphHost
     public Applications(): PragmaticAppsRegistry
     {
         this.AssertRuntimePurpose()
-        this.appsRegistry ??= new PragmaticAppsRegistry(this.Records(EnvServerRegistry.Applications))
+        this.appsRegistry ??= new PragmaticAppsRegistry(this.Records(EnvServerRegistry.Applications), this.options.applicationsRoot === undefined ? undefined : new ApplicationFiles(this.AppsStorage()), this.options.logger ?? StructuredLogger.ToStdout())
         return this.appsRegistry
     }
 

@@ -4,7 +4,6 @@ import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/tes
 import { EnvServerDatabase } from '../../../storage/env-server-database.js'
 import { EnvServerRegistry } from '../../../storage/env-server-registry.js'
 import { EnvironmentRecords } from '../../../storage/environment-records.js'
-import { EnvServerTestDatabase } from '../../../storage/tests/env-server-test-database.js'
 import type { SecurityChangesDto } from '@pragmatic-tech-ai/pragmatic-protocol'
 import { DeliverySecurity } from '../delivery-security.js'
 import type { EnvironmentSecuritySetting } from '../environment-security-setting.js'
@@ -19,9 +18,9 @@ class LogFx
     public static readonly Environment = 'rt-1'
     private static readonly Unused = 'unused'
 
-    public static async Run(body: (log: SecurityChangeLog) => Promise<void>): Promise<void>
+    public static async Run(database: EnvServerDatabase, body: (log: SecurityChangeLog) => Promise<void>): Promise<void>
     {
-        await body(new SecurityChangeLog(LogFx.Records(EnvServerTestDatabase.Mem())))
+        await body(new SecurityChangeLog(LogFx.Records(database)))
     }
 
     public static Records(database: EnvServerDatabase, environment: string = LogFx.Environment): EnvironmentRecords<SecurityChangeLogRecord>
@@ -46,57 +45,60 @@ class LogFx
     }
 }
 
-describe('security change log', () =>
+SqlTestSessions.Describe('security change log', (makeSession, label) =>
 {
-    test('entries are newest first and capped', async () =>
+    describe(label, () =>
     {
-        await LogFx.Run(async log =>
+        test('entries are newest first and capped', async () =>
         {
-            const count = SecurityChangeLog.MaxEntries + 2
-            for (let version = 1; version <= count; version++) await log.Append(LogFx.Entry(version))
-            const listed = await log.List()
-            assert.equal(listed.length, SecurityChangeLog.MaxEntries)
-            assert.equal(listed[0].version, String(count), 'newest first')
-            assert.equal(listed[listed.length - 1].version, String(count - SecurityChangeLog.MaxEntries + 1), 'the oldest beyond the cap are dropped')
+            await LogFx.Run(EnvServerDatabase.Over(await makeSession()), async log =>
+            {
+                const count = SecurityChangeLog.MaxEntries + 2
+                for (let version = 1; version <= count; version++) await log.Append(LogFx.Entry(version))
+                const listed = await log.List()
+                assert.equal(listed.length, SecurityChangeLog.MaxEntries)
+                assert.equal(listed[0].version, String(count), 'newest first')
+                assert.equal(listed[listed.length - 1].version, String(count - SecurityChangeLog.MaxEntries + 1), 'the oldest beyond the cap are dropped')
+            })
         })
-    })
 
-    test('empty diff is not logged', async () =>
-    {
-        await LogFx.Run(async log =>
+        test('empty diff is not logged', async () =>
         {
-            const empty = { IsEmpty: true, Prunes: false, NewlyOwned: [], Prospective: undefined, Rebased: (): unknown => empty } as unknown as SecurityDeployDiff
-            assert.equal(await LogFx.Security(log).Commit(empty, LogFx.App, LogFx.App), undefined)
+            await LogFx.Run(EnvServerDatabase.Over(await makeSession()), async log =>
+            {
+                const empty = { IsEmpty: true, Prunes: false, NewlyOwned: [], Prospective: undefined, Rebased: (): unknown => empty } as unknown as SecurityDeployDiff
+                assert.equal(await LogFx.Security(log).Commit(empty, LogFx.App, LogFx.App), undefined)
+                assert.deepEqual(await log.List(), [])
+            })
+        })
+
+        test('a malformed record lists as empty, is reported, and the next append replaces it', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const diagnostics = new RecordingDiagnostics()
+            await LogFx.Records(database).Put({ id: SecurityChangeLog.RecordKey, entries: 'not a list' } as unknown as SecurityChangeLogRecord)
+            const log = new SecurityChangeLog(LogFx.Records(database), diagnostics)
             assert.deepEqual(await log.List(), [])
+            assert.equal(diagnostics.Unreadables.length, 1)
+            await log.Append(LogFx.Entry(1))
+            assert.deepEqual((await log.List()).map(e => e.version), ['1'])
         })
-    })
 
-    test('a malformed record lists as empty, is reported, and the next append replaces it', async () =>
-    {
-        const database = EnvServerTestDatabase.Mem()
-        const diagnostics = new RecordingDiagnostics()
-        await LogFx.Records(database).Put({ id: SecurityChangeLog.RecordKey, entries: 'not a list' } as unknown as SecurityChangeLogRecord)
-        const log = new SecurityChangeLog(LogFx.Records(database), diagnostics)
-        assert.deepEqual(await log.List(), [])
-        assert.equal(diagnostics.Unreadables.length, 1)
-        await log.Append(LogFx.Entry(1))
-        assert.deepEqual((await log.List()).map(e => e.version), ['1'])
-    })
+        test('an append that cannot reach the database is reported, not thrown', async () =>
+        {
+            const diagnostics = new RecordingDiagnostics()
+            const failing = { Update: () => Promise.reject(new Error('database down')) } as unknown as EnvironmentRecords<SecurityChangeLogRecord>
+            await new SecurityChangeLog(failing, diagnostics).Append(LogFx.Entry(1))
+            assert.equal(diagnostics.AppendFailures.length, 1)
+        })
 
-    test('an append that cannot reach the database is reported, not thrown', async () =>
-    {
-        const diagnostics = new RecordingDiagnostics()
-        const failing = { Update: () => Promise.reject(new Error('database down')) } as unknown as EnvironmentRecords<SecurityChangeLogRecord>
-        await new SecurityChangeLog(failing, diagnostics).Append(LogFx.Entry(1))
-        assert.equal(diagnostics.AppendFailures.length, 1)
-    })
-
-    test('the log survives a restart and is kept per environment', async () =>
-    {
-        const database = EnvServerTestDatabase.Mem()
-        await new SecurityChangeLog(LogFx.Records(database)).Append(LogFx.Entry(7))
-        assert.deepEqual((await new SecurityChangeLog(LogFx.Records(database)).List()).map(e => e.version), ['7'])
-        assert.deepEqual(await new SecurityChangeLog(LogFx.Records(database, 'rt-2')).List(), [])
+        test('the log survives a restart and is kept per environment', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            await new SecurityChangeLog(LogFx.Records(database)).Append(LogFx.Entry(7))
+            assert.deepEqual((await new SecurityChangeLog(LogFx.Records(database)).List()).map(e => e.version), ['7'])
+            assert.deepEqual(await new SecurityChangeLog(LogFx.Records(database, 'rt-2')).List(), [])
+        })
     })
 })
 

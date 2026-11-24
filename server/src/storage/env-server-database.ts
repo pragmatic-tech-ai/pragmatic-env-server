@@ -5,6 +5,19 @@ import { EnvServerDatabaseMissingError } from './env-server-database-missing-err
 import type { EnvServerRegistry } from './env-server-registry.js'
 import { SqlAccessAuditRecords } from './sql-access-audit-records.js'
 
+/** The env server database did not answer before the start's deadline (EnvServerDatabase.ReadyTimeoutMs). */
+export class EnvServerDatabaseUnreadyError extends Error
+{
+    private static readonly ErrorName = 'EnvServerDatabaseUnreadyError'
+    private static readonly Text = 'the env server database did not answer in time'
+
+    public constructor()
+    {
+        super(EnvServerDatabaseUnreadyError.Text)
+        this.name = EnvServerDatabaseUnreadyError.ErrorName
+    }
+}
+
 /**
  * The env server's own Postgres database (A5): one per deployment, shared by every environment the process hosts (rows
  * carry the environment id). The custom platform opens it from the URL in the secret file
@@ -52,18 +65,41 @@ export class EnvServerDatabase
         {
             try
             {
-                await session.Query(D.ProbeSql, D.NoParams)
+                // Each probe is bounded by the time left: a database that never answers (a connect that hangs) cannot
+                // hold the start past the deadline.
+                await D.Within(session.Query(D.ProbeSql, D.NoParams), deadline - Date.now())
                 return new EnvServerDatabase(session, session)
             }
             catch (error)
             {
-                if (Date.now() + D.ReadyPollMs > deadline)
+                if (error instanceof EnvServerDatabaseUnreadyError || Date.now() + D.ReadyPollMs > deadline)
                 {
-                    await session.Dispose()
+                    // Bounded too: closing a pool whose connect hangs waits for that connect.
+                    await D.Within(session.Dispose(), D.ReadyPollMs).catch(() => undefined)
                     throw error
                 }
                 await new Promise<void>(resolve => setTimeout(resolve, D.ReadyPollMs))
             }
+        }
+    }
+
+    /** `work`, or EnvServerDatabaseUnreadyError when it has not settled within `ms`. */
+    private static async Within<T>(work: Promise<T>, ms: number): Promise<T>
+    {
+        // A late rejection of work that lost the race is not an unhandled one.
+        work.catch(() => undefined)
+        let timer: NodeJS.Timeout | undefined
+        const expired = new Promise<never>((_, reject) =>
+        {
+            timer = setTimeout(() => reject(new EnvServerDatabaseUnreadyError()), Math.max(0, ms))
+        })
+        try
+        {
+            return await Promise.race([work, expired])
+        }
+        finally
+        {
+            clearTimeout(timer)
         }
     }
 

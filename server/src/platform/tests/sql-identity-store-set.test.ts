@@ -4,6 +4,7 @@ import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/tes
 import { IdentityConfig, DelegationDepth, Realm, RealmKind, Role, Grant, ResourceRef, ResourceKind, Principal, PrincipalKind } from '@pragmatic-tech-ai/pragmatic-identity'
 import { EnvServerDatabase } from '../../storage/env-server-database.js'
 import { SqlIdentityStoreSet } from '../sql-identity-store-set.js'
+import { GrantOutsideEnvironmentError } from '../environment-grant-store.js'
 
 class StoreSetFixture
 {
@@ -38,6 +39,20 @@ SqlTestSessions.Describe('SqlIdentityStoreSet', (makeSession, label) =>
             assert.deepEqual(await b.Grants.GrantsOn(new ResourceRef(ResourceKind.Realm, ra.Id, [])), [])
             await a.Secrets.Put('ann-pw', 'hash-a')
             assert.equal(await b.Secrets.Get('ann-pw'), null)
+        })
+
+        it('an environment cannot save or revoke a grant on a resource of another environment (the table is shared)', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const set = await SqlIdentityStoreSet.Open(database.Session)
+            const a = set.For('env-a', await database.Secrets('env-a', StoreSetFixture.Key))
+            const b = set.For('env-b', await database.Secrets('env-b', StoreSetFixture.Key))
+            const onB = new Grant('ann', Role.Owner, new ResourceRef(ResourceKind.Realm, 'env-b', []))
+            await assert.rejects(a.Grants.Save(onB), GrantOutsideEnvironmentError)
+            assert.deepEqual(await b.Grants.GrantsFor('ann', StoreSetFixture.Realm('env-b')), [], 'nothing landed in env-b')
+            await b.Grants.Save(onB)
+            await assert.rejects(a.Grants.Revoke(onB), GrantOutsideEnvironmentError)
+            assert.equal((await b.Grants.GrantsFor('ann', StoreSetFixture.Realm('env-b'))).length, 1, 'env-b keeps its grant')
         })
 
         it('a session issued in one environment does not validate in another, even for the same principal id', async () =>

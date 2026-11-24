@@ -56,8 +56,8 @@ export class ServerBootstrap
     }
 
     /**
-     * The access audit sink: sql (the default) writes rows to the platform's identity audit store (realm = environment
-     * id), none drops them; the retired file sink is refused (AuditSinkRetiredError).
+     * The access audit sink: sql (the default) appends rows to the env server database's env_access_audit table
+     * (SqlAccessAuditRecords, realm = environment id), none drops them; the retired file sink is refused (AuditSinkRetiredError).
      */
     public static async AuditSink(config: ServerConfig, logger: ILogger, observability: Observability | undefined, platform: PlatformServices): Promise<IAccessAuditSink>
     {

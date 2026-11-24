@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/testing'
 import { EnvServerDatabase } from '../env-server-database.js'
 import { EnvServerRegistry } from '../env-server-registry.js'
-import { EnvironmentRecords, EnvironmentRecordKeyChangedError } from '../environment-records.js'
+import { EnvironmentIdInvalidError, EnvironmentRecords, EnvironmentRecordKeyChangedError } from '../environment-records.js'
 
 type Note = { id: string; text: string }
 
@@ -37,6 +37,33 @@ SqlTestSessions.Describe('EnvironmentRecords', (makeSession, label) =>
             await long.Put({ id: 'x', text: 'long' })
             assert.deepEqual(await short.List(), [])
             assert.equal(await short.Get('x'), undefined)
+        })
+
+        it('List reads only its own prefix from the database (ListPrefix), never the rows of every environment', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const records = await EnvironmentRecords.Open<Note>(database, EnvServerRegistry.DevGraphs, 'env-a')
+            await new EnvironmentRecords<Note>(database, EnvServerRegistry.DevGraphs, 'env-b').Put({ id: 'g', text: 'b' })
+            await records.Put({ id: 'g', text: 'a' })
+            const store = await database.Records<Note>(EnvServerRegistry.DevGraphs)
+            const prefixes: string[] = []
+            const listPrefix = store.ListPrefix.bind(store)
+            store.ListPrefix = async (prefix: string) =>
+            {
+                prefixes.push(prefix)
+                return listPrefix(prefix)
+            }
+            store.List = async () => assert.fail('List must not read the rows of every environment')
+            assert.deepEqual(await records.List(), [{ id: 'g', text: 'a' }])
+            assert.deepEqual(prefixes, ['env-a/'])
+        })
+
+        it('refuses an environment id that is empty or holds a / (it would read the keys of another environment)', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            assert.throws(() => new EnvironmentRecords<Note>(database, EnvServerRegistry.DevGraphs, 'a/b'), EnvironmentIdInvalidError)
+            assert.throws(() => new EnvironmentRecords<Note>(database, EnvServerRegistry.DevGraphs, ''), EnvironmentIdInvalidError)
+            await assert.rejects(EnvironmentRecords.Open<Note>(database, EnvServerRegistry.DevGraphs, 'a/b'), EnvironmentIdInvalidError)
         })
 
         it('Update reads, writes and deletes under the environment key and keeps the key', async () =>

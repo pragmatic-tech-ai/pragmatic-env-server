@@ -1,8 +1,8 @@
 import type { IStorage } from '@pragmatic-tech-ai/todl-runtime'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { DeliveryChannel, EnvironmentCatalogError, SystemNames } from '@pragmatic-tech-ai/todl/engine'
 import { AppWriteStatus, type AppDeployResultDto, type CypherAppDeployParamsDto } from '@pragmatic-tech-ai/pragmatic-protocol'
-import { PragmaticAppsRegistry } from './pragmatic-apps-registry.js'
+import { AppVersionConflictError, PragmaticAppsRegistry } from './pragmatic-apps-registry.js'
 import type { PragmaticAppManifest } from './pragmatic-app-manifest.js'
 import { EnvironmentUpgradeFailedError } from '../environment/environment-engine-host.js'
 import type { DeliveryChange, IDeliveryGate } from '../environment/environment-deliveries.js'
@@ -64,12 +64,9 @@ interface IngestPlan
 export class AppIngestService
 {
     private static readonly ModelFile = 'model.json'
-    private static readonly ArrayOpen = '['
-    private static readonly ArrayClose = ']'
-    private static readonly ObjectOpen = '{'
-    private static readonly ObjectClose = '}'
-    private static readonly JsonComma = ','
-    private static readonly JsonColon = ':'
+    private static readonly DigestAlgorithm = 'sha256'
+    private static readonly DigestSeparator = '\u0000'
+    private static readonly DigestEncoding = 'hex'
     private static readonly UiDir = 'ui'
     private static readonly ReservedVersions: ReadonlySet<string> = new Set(['live', 'ui', 'application.json'])
     private static readonly ReservedVersionMessage = 'this application version name is reserved'
@@ -135,14 +132,30 @@ export class AppIngestService
                 await this.Commit(plan.files.filter(file => file.storage === this.packages && file.skip !== true))
                 // S4 steps 2-4: the gate validates the prospective deliveries, runs the persist step, applies the
                 // security diff, then upgrades; the deploy answers the security changes it applied (S4 Task 13).
+                const digest = AppIngestService.DigestOf(plan, this.applications)
                 const delivered = await this.gate.Deliver(AppIngestService.ChangeOf(params), async () =>
                 {
-                    if (!resume)
+                    if (resume)
+                    {
+                        // The commit: add the manifest and move the live pointer in one write (immutability re-checked inside it).
+                        await this.registry.Commit(plan.manifest)
+                        return
+                    }
+                    // Claimed before the first UI file is written: a concurrent writer of this version with other content
+                    // (another worker) is refused here, before it can overwrite a byte of the winner's tree. A failed
+                    // attempt drops its claim, so a corrected retry of the version is not blocked.
+                    await this.registry.Claim(plan.manifest, digest)
+                    try
                     {
                         await this.Commit(plan.files.filter(file => file.storage === this.applications))
+                        // The commit: the UI tree is in place, so add the manifest and move the live pointer in one write.
+                        await this.registry.Commit(plan.manifest, digest)
                     }
-                    // The commit: the UI tree is in place, so add the manifest and move the live pointer in one write.
-                    await this.registry.Commit(plan.manifest)
+                    catch (error)
+                    {
+                        await this.registry.ReleaseClaim(plan.manifest, digest).catch(() => undefined)
+                        throw error
+                    }
                 })
                 const applied: AppDeployResultDto = { status: AppWriteStatus.Applied, appName, appVersion }
                 return delivered.SecurityChanges === undefined ? applied : { ...applied, securityChanges: delivered.SecurityChanges }
@@ -176,6 +189,11 @@ export class AppIngestService
         {
             // S4 step 4: the app is live, the engine upgrade failed (the host reported it and retries on next use).
             return { status: AppWriteStatus.Failed, reason: EnvironmentUpgradeFailedError.Reason, appName, appVersion }
+        }
+        if (error instanceof AppVersionConflictError)
+        {
+            // Another writer committed or claimed this version first (another worker): versions are immutable.
+            return { status: AppWriteStatus.Conflict, reason: AppIngestService.VersionExistsMessage, appName, appVersion }
         }
         const rejected = error instanceof IngestRejection
         if (!rejected)
@@ -262,7 +280,7 @@ export class AppIngestService
      *  already-stored package file differs. */
     private async MatchesStored(plan: IngestPlan, stored: PragmaticAppManifest): Promise<boolean>
     {
-        if (AppIngestService.Canonical(stored) !== AppIngestService.Canonical(plan.manifest))
+        if (PragmaticAppsRegistry.Canonical(stored) !== PragmaticAppsRegistry.Canonical(plan.manifest))
         {
             return false
         }
@@ -286,19 +304,17 @@ export class AppIngestService
         return true
     }
 
-    /** JSON with object keys sorted (the database's jsonb does not keep key order). */
-    private static Canonical(value: unknown): string
+    /** The digest of what this ingest writes as the version: its canonical manifest and every UI file (path and bytes). */
+    private static DigestOf(plan: IngestPlan, applications: IStorage): string
     {
-        if (Array.isArray(value))
+        const A = AppIngestService
+        const hash = createHash(A.DigestAlgorithm).update(PragmaticAppsRegistry.Canonical(plan.manifest))
+        const ui = plan.files.filter(file => file.storage === applications).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+        for (const file of ui)
         {
-            return AppIngestService.ArrayOpen + value.map(item => AppIngestService.Canonical(item)).join(AppIngestService.JsonComma) + AppIngestService.ArrayClose
+            hash.update(A.DigestSeparator).update(file.path).update(A.DigestSeparator).update(file.bytes)
         }
-        if (value !== null && typeof value === 'object')
-        {
-            const entries = Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-            return AppIngestService.ObjectOpen + entries.map(([key, item]) => JSON.stringify(key) + AppIngestService.JsonColon + AppIngestService.Canonical(item)).join(AppIngestService.JsonComma) + AppIngestService.ObjectClose
-        }
-        return JSON.stringify(value)
+        return hash.digest(A.DigestEncoding)
     }
 
     private Validate(params: CypherAppDeployParamsDto): IngestPlan

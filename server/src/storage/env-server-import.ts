@@ -90,8 +90,11 @@ export class EnvironmentImport
  * The data is only read (the identity files through a private local copy, since the file stores rewrite legacy layouts
  * when they open); it stays as the backup. Each environment is imported in one transaction under an advisory lock, and
  * its completion record `pre-a5/<environmentId>` is written last, so a failed import is never mistaken for a finished
- * one and two replicas starting together import once. Until an environment's import finished no server has served it
- * (the start fails), so a re-run adds whatever is missing. A forced re-run of a FINISHED environment never moves the
+ * one and two replicas starting together import once (the one that waited for the lock finds it finished and writes
+ * nothing). A start that fails one environment's import reports it and goes on; until an environment's import finished
+ * no server has served it (EnvironmentRegistry refuses its open while IsPending), so a re-run adds whatever is missing.
+ * Only the environment's own realm is imported: a token, grant or realm configuration of another realm in its files is
+ * reported and skipped (the tables are shared by every environment). A forced re-run of a FINISHED environment never moves the
  * database back: it adds only documents and secrets that are absent and application versions the database lacks
  * (keeping its live pointers), and leaves identity rows and the audit alone (the server may have revoked, re-enabled or
  * recorded since). One unreadable record (an invalid realm configuration, an account whose email another account holds)
@@ -122,6 +125,7 @@ export class EnvServerImport
     public static readonly ManifestFile = 'application.json'
     public static readonly LivePointerFile = 'live'
     private static readonly Root = ''
+    private static readonly HiddenPrefix = '.'
     private static readonly ModuleName = 'env-server-import'
     private static readonly GraphsRootKey = 'graphs'
     private static readonly TokensRootKey = 'records'
@@ -136,6 +140,10 @@ export class EnvServerImport
     private static readonly RealmConfigUnreadable = 'realm config unreadable, not imported: '
     private static readonly AccountRefused = 'account not imported: '
     private static readonly EmailTaken = ' (another account holds its email)'
+    private static readonly TokenOtherRealm = 'service token not imported (another realm): '
+    private static readonly GrantOtherRealm = 'grant not imported (on another realm): '
+    private static readonly RealmConfigOtherRealm = 'realm config not imported (another realm): '
+    private static readonly RealmSuffix = ' in '
     private static readonly ReasonSeparator = ' '
     private static readonly UnknownReason = 'UnknownError'
     private static readonly LockSql = 'SELECT pg_advisory_xact_lock($1::bigint)'
@@ -183,7 +191,7 @@ export class EnvServerImport
                 pending.push(environmentId)
             }
         }
-        return pending.length === 0 ? undefined : this.Import(pending)
+        return pending.length === 0 ? undefined : this.Import(pending, false, true)
     }
 
     /** Imports every environment folder that holds pre-A5 data; refuses environments the database already holds records
@@ -206,7 +214,20 @@ export class EnvServerImport
                 throw new EnvServerImportRefusedError(nonEmpty)
             }
         }
-        return this.Import(environments)
+        return this.Import(environments, force, false)
+    }
+
+    /** Whether the environment holds pre-A5 files and no finished import (it must not be served: its records are not
+     *  all in the database yet). */
+    public IsPending(environmentId: string): Promise<boolean>
+    {
+        return EnvServerImport.PendingIn(this.database, this.source, environmentId)
+    }
+
+    /** IsPending without a master key (an environment's open checks it before anything else). */
+    public static async PendingIn(database: EnvServerDatabase, source: EnvServerImportSource, environmentId: string): Promise<boolean>
+    {
+        return EnvServerImport.IsEnvironmentName(environmentId) && await EnvServerImport.HoldsFiles(source, environmentId) && !await EnvServerImport.Finished(database, environmentId)
     }
 
     /** The environment folders at the storage root that hold any file the import reads, by name. */
@@ -215,7 +236,7 @@ export class EnvServerImport
         const result: string[] = []
         for (const name of await this.source.Folders(EnvServerImport.Root))
         {
-            if (await this.HoldsFiles(name))
+            if (EnvServerImport.IsEnvironmentName(name) && await EnvServerImport.HoldsFiles(this.source, name))
             {
                 result.push(name)
             }
@@ -223,18 +244,24 @@ export class EnvServerImport
         return result
     }
 
-    private async HoldsFiles(folder: string): Promise<boolean>
+    private static async HoldsFiles(source: EnvServerImportSource, folder: string): Promise<boolean>
     {
         const I = EnvServerImport
         const S = EnvServerImportSource
-        const identity = await this.source.Files(S.Join(folder, I.IdentityDir))
-        const graphs = await this.source.Files(S.Join(folder, I.GraphsDir))
+        const identity = await source.Files(S.Join(folder, I.IdentityDir))
+        const graphs = await source.Files(S.Join(folder, I.GraphsDir))
+        // Not the applications folder: its manifests and live pointers are the in-cluster unpacker's handoff files, written
+        // after A5 too (ApplicationFiles; taken in at every start, PragmaticAppsRegistry.TakeUnpacked), so they do not
+        // make an environment pre-A5. An environment with pre-A5 identity or graph files imports its applications too.
         return identity.some(file => I.IdentityFiles.includes(file))
             || graphs.some(file => I.GraphFiles.includes(file))
-            || (await this.ApplicationNames(S.Join(folder, I.ApplicationsDir))).length > 0
     }
 
-    private async Import(environments: readonly string[]): Promise<EnvServerImportReport>
+    /** `forced`: re-import environments whose import finished (the CLI's --force); otherwise an environment another
+     *  replica finished while this one waited for its lock is left alone. `continueOnFailure` (a start): one
+     *  environment's failure is reported (`Failed`) and the others go on, and EnvironmentRegistry refuses only that
+     *  environment's open; otherwise (the CLI) the first failure throws. */
+    private async Import(environments: readonly string[], forced: boolean, continueOnFailure: boolean): Promise<EnvServerImportReport>
     {
         const report = new EnvServerImportReport()
         const session = this.database.Session
@@ -244,19 +271,37 @@ export class EnvServerImport
         }
         for (const environmentId of environments)
         {
-            await session.Transaction(tx => this.ImportEnvironment(EnvServerDatabase.Over(tx), environmentId, report))
+            try
+            {
+                await session.Transaction(tx => this.ImportEnvironment(EnvServerDatabase.Over(tx), environmentId, report, forced))
+            }
+            catch (error)
+            {
+                if (!continueOnFailure)
+                {
+                    throw error
+                }
+                // Rolled back: no completion record, so the environment stays pending (and refused) until a start imports it.
+                report.Fail(environmentId, EnvServerImport.NameOf(error))
+            }
         }
         report.Skipped.push(EnvServerImport.SessionsSkipped, EnvServerImport.AccessAuditSkipped)
         return report
     }
 
     /** One environment, over the import's transaction: the lock, every step, the completion record last. */
-    private async ImportEnvironment(database: EnvServerDatabase, environmentId: string, report: EnvServerImportReport): Promise<void>
+    private async ImportEnvironment(database: EnvServerDatabase, environmentId: string, report: EnvServerImportReport, forced: boolean): Promise<void>
     {
         const I = EnvServerImport
         const S = EnvServerImportSource
         await database.Session.Query(I.LockSql, [I.LockKey(environmentId)])
-        const run = new EnvironmentImport(database, environmentId, await I.Finished(database, environmentId), report)
+        const finished = await I.Finished(database, environmentId)
+        if (finished && !forced)
+        {
+            // Another replica imported it while this one waited for the lock: nothing to write, nothing to report.
+            return
+        }
+        const run = new EnvironmentImport(database, environmentId, finished, report)
         await this.ImportIdentity(run, S.Join(environmentId, I.IdentityDir))
         const graphs = S.Join(environmentId, I.GraphsDir)
         await this.ImportDevGraphs(run, graphs)
@@ -294,8 +339,8 @@ export class EnvServerImport
             const realm = new Realm(run.EnvironmentId, RealmKind.SelfHosted, run.EnvironmentId)
             run.Count(I.Accounts, await this.ImportAccounts(run, realm, files, target))
             run.Count(I.Groups, await this.ImportGroups(realm, files, target))
-            run.Count(I.Tokens, await this.ImportTokens(run.Database.Session, copy))
-            run.Count(I.Grants, await this.ImportGrants(copy, target))
+            run.Count(I.Tokens, await this.ImportTokens(run, copy))
+            run.Count(I.Grants, await this.ImportGrants(run, copy, target))
             const snapshot = await files.IdpDirectory.Get(run.EnvironmentId)
             if (snapshot !== null && await target.IdpDirectory.Get(run.EnvironmentId) === null)
             {
@@ -376,24 +421,35 @@ export class EnvServerImport
     }
 
     /** The service tokens with their hashes (the file and SQL stores hash a token the same way), so issued tokens keep working. */
-    private async ImportTokens(session: ISqlSession, copy: string): Promise<number>
+    private async ImportTokens(run: EnvironmentImport, copy: string): Promise<number>
     {
         const document = EnvServerImport.ReadLocalJson<Record<string, Record<string, FileTokenRecord>>>(join(copy, EnvServerImport.TokensFile), {})
         let count = 0
         for (const [hash, token] of Object.entries(document[EnvServerImport.TokensRootKey] ?? {}))
         {
-            count += await session.Execute(EnvServerImport.InsertTokenSql, [hash, token.tokenRef, token.principalId, token.realmId, JSON.stringify([...token.scopes]), token.expiresAt, token.revoked]) > 0 ? 1 : 0
+            // The tables are shared by every environment: a token of another realm in this folder would act there.
+            if (token.realmId !== run.EnvironmentId)
+            {
+                run.Skip(EnvServerImport.TokenOtherRealm + token.tokenRef + EnvServerImport.RealmSuffix + token.realmId)
+                continue
+            }
+            count += await run.Database.Session.Execute(EnvServerImport.InsertTokenSql, [hash, token.tokenRef, token.principalId, token.realmId, JSON.stringify([...token.scopes]), token.expiresAt, token.revoked]) > 0 ? 1 : 0
         }
         return count
     }
 
-    /** The role grants the database lacks. */
-    private async ImportGrants(copy: string, target: IdentityStoreSet): Promise<number>
+    /** The role grants on this environment's resources the database lacks; a grant on another realm is skipped. */
+    private async ImportGrants(run: EnvironmentImport, copy: string, target: IdentityStoreSet): Promise<number>
     {
         const document = EnvServerImport.ReadLocalJson<Record<string, FileGrantRecord[]>>(join(copy, EnvServerImport.GrantsFile), {})
         let count = 0
         for (const record of document[EnvServerImport.GrantsRootKey] ?? [])
         {
+            if (record.resourceRealmId !== run.EnvironmentId)
+            {
+                run.Skip(EnvServerImport.GrantOtherRealm + record.subject + EnvServerImport.RealmSuffix + record.resourceRealmId)
+                continue
+            }
             const resource = new ResourceRef(record.resourceKind, record.resourceRealmId, [...record.resourcePath])
             const stored = await target.Grants.GrantsOn(resource)
             if (!stored.some(grant => grant.Subject === record.subject && grant.Role === record.role))
@@ -405,13 +461,19 @@ export class EnvServerImport
         return count
     }
 
-    /** Every realm configuration the database lacks; an unreadable one is reported and skipped. */
+    /** The environment's own realm configuration when the database lacks it; one of another realm, or an unreadable
+     *  one, is reported and skipped. */
     private async ImportRealmConfigs(run: EnvironmentImport, storage: NodeFsStorage, set: SqlIdentityStoreSet): Promise<number>
     {
         const configs = await FileRealmConfigStore.Open(storage)
         let count = 0
         for (const realmId of await configs.List())
         {
+            if (realmId !== run.EnvironmentId)
+            {
+                run.Skip(EnvServerImport.RealmConfigOtherRealm + realmId)
+                continue
+            }
             try
             {
                 const config = await configs.Get(realmId)
@@ -644,6 +706,12 @@ export class EnvServerImport
     private static ReadLocalJson<T>(file: string, absent: T): T
     {
         return existsSync(file) ? JSON.parse(readFileSync(file, EnvServerImport.Utf8)) as T : absent
+    }
+
+    /** An environment folder's name: not dot-led (`.postgres`, the server database's data on the volume; `.git`). */
+    private static IsEnvironmentName(name: string): boolean
+    {
+        return name !== EnvServerImport.Root && !name.startsWith(EnvServerImport.HiddenPrefix)
     }
 
     private static NameOf(error: unknown): string

@@ -4,6 +4,7 @@ import { OidcFlowState } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc
 import { PgSession, SqlOidcFlowStateStore } from '@pragmatic-tech-ai/pragmatic-realm-adapters'
 import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/testing'
 import { EnvironmentFlowStateStore } from '../environment-flow-state-store.js'
+import { EnvironmentIdInvalidError } from '../../storage/environment-records.js'
 
 class FlowFixture
 {
@@ -27,6 +28,13 @@ SqlTestSessions.Describe('EnvironmentFlowStateStore', (makeSession, label) =>
             const taken = await a.Take('s1')
             assert.equal(taken?.State, 's1', 'the key comes back without the environment prefix')
             assert.equal(taken?.Nonce, 'nonce-s1')
+        })
+
+        it('refuses an environment id that is empty or holds a / (environment a with state b/s would be environment a/b with state s)', async () =>
+        {
+            const inner = await SqlOidcFlowStateStore.Open(await makeSession())
+            assert.throws(() => new EnvironmentFlowStateStore(inner, 'a/b'), EnvironmentIdInvalidError)
+            assert.throws(() => new EnvironmentFlowStateStore(inner, ''), EnvironmentIdInvalidError)
         })
 
         it('a state is taken once and keeps its return path', async () =>

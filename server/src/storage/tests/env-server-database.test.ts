@@ -3,9 +3,10 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer, type Server, type Socket } from 'node:net'
 import type { ISqlSession, SqlRow } from '@pragmatic-tech-ai/todl'
 import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/testing'
-import { EnvServerDatabase } from '../env-server-database.js'
+import { EnvServerDatabase, EnvServerDatabaseUnreadyError } from '../env-server-database.js'
 import { EnvServerDatabaseMissingError } from '../env-server-database-missing-error.js'
 import { EnvServerRegistry } from '../env-server-registry.js'
 
@@ -37,9 +38,38 @@ class CountingSession implements ISqlSession
     }
 }
 
+/** A TCP listener that accepts connections and never answers (a database whose connect hangs). */
+class SilentListener
+{
+    private readonly sockets: Socket[] = []
+
+    private constructor(private readonly server: Server, public readonly Port: number)
+    {
+    }
+
+    public static async Start(): Promise<SilentListener>
+    {
+        const server = createServer()
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+        const listener = new SilentListener(server, (server.address() as { port: number }).port)
+        server.on('connection', socket => listener.sockets.push(socket))
+        return listener
+    }
+
+    public async Close(): Promise<void>
+    {
+        for (const socket of this.sockets)
+        {
+            socket.destroy()
+        }
+        await new Promise<void>(resolve => this.server.close(() => resolve()))
+    }
+}
+
 class DatabaseFixture
 {
     public static readonly Secret = 'postgres://env:never-shown@127.0.0.1:1/env_server'
+    public static readonly LineEnd = String.fromCharCode(10)
 
     public static UrlFile(content: string): string
     {
@@ -100,5 +130,22 @@ describe('EnvServerDatabase.Open', () =>
         const waited = Date.now() - started
         assert.ok(waited >= 1_000, `waited ${waited} ms`)
         assert.ok(waited < 10_000, `waited ${waited} ms`)
+    })
+
+    it('a database whose connect never answers gives up at the deadline, not at the TCP timeout', async () =>
+    {
+        const listener = await SilentListener.Start()
+        try
+        {
+            const file = DatabaseFixture.UrlFile('postgres://env:never-shown@127.0.0.1:' + listener.Port + '/env_server' + DatabaseFixture.LineEnd)
+            const started = Date.now()
+            await assert.rejects(EnvServerDatabase.Open({ PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE: file }, 1_500), (error: Error) => error instanceof EnvServerDatabaseUnreadyError && !error.message.includes('never-shown'))
+            const waited = Date.now() - started
+            assert.ok(waited < 1_500 + 1_000 + 1_000, `waited ${waited} ms`)
+        }
+        finally
+        {
+            await listener.Close()
+        }
     })
 })

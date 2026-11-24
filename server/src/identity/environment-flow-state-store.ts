@@ -1,5 +1,6 @@
 import { OidcFlowState, type IOidcFlowStateStore } from '@pragmatic-tech-ai/pragmatic-identity-source-oidc'
 import type { SqlOidcFlowStateStore } from '@pragmatic-tech-ai/pragmatic-realm-adapters'
+import { EnvironmentIdInvalidError } from '../storage/environment-records.js'
 
 /**
  * One environment's view of the env server's pending OIDC sign-ins (A5): every environment and every worker of the
@@ -15,6 +16,7 @@ export class EnvironmentFlowStateStore implements IOidcFlowStateStore
 
     public constructor(private readonly inner: SqlOidcFlowStateStore, environmentId: string)
     {
+        EnvironmentIdInvalidError.Assert(environmentId)
         this.prefix = environmentId + EnvironmentFlowStateStore.Separator
     }
 

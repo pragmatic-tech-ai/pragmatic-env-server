@@ -67,12 +67,25 @@ export class EnvServerImportSource
         }
         catch (error)
         {
-            // A folder that does not exist lists as empty (an object store lists a missing prefix as empty anyway).
-            if (path !== EnvServerImportSource.Root && !await this.storage.Exists(path))
+            // A folder that does not exist lists as empty (an object store lists a missing prefix as empty anyway), the
+            // base folder included (a fresh deployment has none yet).
+            if (!await this.ExistsQuietly(path))
             {
                 return []
             }
             throw error
+        }
+    }
+
+    private async ExistsQuietly(path: string): Promise<boolean>
+    {
+        try
+        {
+            return await this.storage.Exists(path)
+        }
+        catch
+        {
+            return false
         }
     }
 }

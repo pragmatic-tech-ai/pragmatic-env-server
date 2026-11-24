@@ -5,6 +5,7 @@ import { NullLogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { ServerBootstrap } from '../../bin/server-bootstrap.js'
 import { AuditSinkRetiredError } from '../../bin/audit-sink-retired-error.js'
 import { CustomPlatformFixture } from '../../platform/tests/custom-platform-fixture.js'
+import { SqlTestSessions } from '@pragmatic-tech-ai/pragmatic-realm-adapters/testing'
 
 class AuditFixture
 {
@@ -14,28 +15,31 @@ class AuditFixture
     }
 }
 
-describe('env server access audit sink', () =>
+SqlTestSessions.Describe('env server access audit sink', (makeSession, label) =>
 {
-    it('custom platform writes access audit rows with realm = environment id', async () =>
+    describe(label, () =>
     {
-        const platform = CustomPlatformFixture.Mem()
-        const sink = await ServerBootstrap.AuditSink(AuditFixture.Config(), new NullLogger(), undefined, platform)
-        await sink.Record({ Timestamp: new Date(), EnvironmentId: 'env-a', PrincipalId: 'ann', Surface: AuditSurface.Http, MethodOrPath: '/auth/login', Outcome: AuditOutcome.Deny, Reason: 'bad-credentials' })
-        await sink.Record({ Timestamp: new Date(), EnvironmentId: 'env-b', Surface: AuditSurface.Http, MethodOrPath: '/auth/login', Outcome: AuditOutcome.Allow })
-        await sink.Drain()
-        const rows = await platform.Database.Session.Query('SELECT realm_id, principal_id FROM env_access_audit ORDER BY realm_id', [])
-        assert.deepEqual(rows.map(r => [r.realm_id, r.principal_id]), [['env-a', 'ann'], ['env-b', null]])
-    })
+        it('custom platform writes access audit rows with realm = environment id', async () =>
+        {
+            const platform = CustomPlatformFixture.Over(await makeSession())
+            const sink = await ServerBootstrap.AuditSink(AuditFixture.Config(), new NullLogger(), undefined, platform)
+            await sink.Record({ Timestamp: new Date(), EnvironmentId: 'env-a', PrincipalId: 'ann', Surface: AuditSurface.Http, MethodOrPath: '/auth/login', Outcome: AuditOutcome.Deny, Reason: 'bad-credentials' })
+            await sink.Record({ Timestamp: new Date(), EnvironmentId: 'env-b', Surface: AuditSurface.Http, MethodOrPath: '/auth/login', Outcome: AuditOutcome.Allow })
+            await sink.Drain()
+            const rows = await platform.Database.Session.Query('SELECT realm_id, principal_id FROM env_access_audit ORDER BY realm_id', [])
+            assert.deepEqual(rows.map(r => [r.realm_id, r.principal_id]), [['env-a', 'ann'], ['env-b', null]])
+        })
 
-    it('sql is the default and none drops the records', async () =>
-    {
-        const platform = CustomPlatformFixture.Mem()
-        assert.ok(!(await ServerBootstrap.AuditSink(AuditFixture.Config(AuditSinkKind.Sql), new NullLogger(), undefined, platform) instanceof NullAccessAuditSink))
-        assert.ok(await ServerBootstrap.AuditSink(AuditFixture.Config(AuditSinkKind.None), new NullLogger(), undefined, platform) instanceof NullAccessAuditSink)
-    })
+        it('sql is the default and none drops the records', async () =>
+        {
+            const platform = CustomPlatformFixture.Mem()
+            assert.ok(!(await ServerBootstrap.AuditSink(AuditFixture.Config(AuditSinkKind.Sql), new NullLogger(), undefined, platform) instanceof NullAccessAuditSink))
+            assert.ok(await ServerBootstrap.AuditSink(AuditFixture.Config(AuditSinkKind.None), new NullLogger(), undefined, platform) instanceof NullAccessAuditSink)
+        })
 
-    it('PRAGMATIC_AUDIT_SINK=file refuses the start naming the variable', async () =>
-    {
-        await assert.rejects(ServerBootstrap.AuditSink(AuditFixture.Config(AuditSinkKind.File), new NullLogger(), undefined, CustomPlatformFixture.Mem()), (error: Error) => error instanceof AuditSinkRetiredError && /PRAGMATIC_AUDIT_SINK/.test(error.message))
+        it('PRAGMATIC_AUDIT_SINK=file refuses the start naming the variable', async () =>
+        {
+            await assert.rejects(ServerBootstrap.AuditSink(AuditFixture.Config(AuditSinkKind.File), new NullLogger(), undefined, CustomPlatformFixture.Mem()), (error: Error) => error instanceof AuditSinkRetiredError && /PRAGMATIC_AUDIT_SINK/.test(error.message))
+        })
     })
 })

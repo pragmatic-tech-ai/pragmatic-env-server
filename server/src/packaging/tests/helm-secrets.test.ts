@@ -75,3 +75,16 @@ test('the chart requires database.urlSecret (the render fails naming it when emp
     }
     assert.match(Chart.Text('values.yaml'), /database:\n\s+urlSecret: \S+\n\s+urlKey: database-url/)
 })
+
+test('the env server database Secret, its mount and its URL file setting render only with deploymentMode local (a cloud mode stores in its provider database)', () =>
+{
+    for (const template of ['deployment.yaml', 'worker-statefulset.yaml'])
+    {
+        const text = Chart.Text(join('templates', template))
+        const gated = /\{\{- if eq \.Values\.deploymentMode "local" \}\}\n\s*- name: PRAGMATIC_ENV_SERVER_DATABASE_URL_FILE\n[^\n]*\n\s*\{\{- end \}\}/
+        assert.match(text, gated, template + ': URL file setting')
+        assert.match(text, /\{\{- if eq \.Values\.deploymentMode "local" \}\}\n\s*- name: database-url\n\s*mountPath: \/run\/secrets\/pragmatic-env-server\n\s*readOnly: true\n\s*\{\{- end \}\}/, template + ': mount')
+        assert.match(text, /\{\{- if eq \.Values\.deploymentMode "local" \}\}\n(\s*#[^\n]*\n)*\s*- name: database-url\n\s*secret:\n[\s\S]*?path: database-url\n\s*\{\{- end \}\}/, template + ': volume')
+        assert.equal((text.match(/database-url/g) ?? []).length, (text.match(/deploymentMode "local" \}\}[\s\S]*?\{\{- end \}\}/g) ?? []).join('').match(/database-url/g)?.length, template + ': every database-url use is gated')
+    }
+})

@@ -8,6 +8,22 @@ import { InMemoryEnvironmentOwnership, EnvironmentOwnedElsewhereError, type IEnv
 import type { IdentityRuntime } from '../identity/identity-runtime.js'
 import type { ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import type { IEnvironmentProvisioning, EnvironmentProvisioning } from './environment-provisioning.js'
+import { EnvServerImport } from '../storage/env-server-import.js'
+import { EnvServerImportSource } from '../storage/env-server-import-source.js'
+
+/** The environment holds pre-A5 files whose import has not finished (it failed at start; the next start retries), so
+ *  it is not served: its records are not all in the database. */
+export class EnvironmentImportPendingError extends Error
+{
+    private static readonly ErrorName = 'EnvironmentImportPendingError'
+    private static readonly Text = 'the pre-A5 data of the environment is not imported yet'
+
+    public constructor()
+    {
+        super(EnvironmentImportPendingError.Text)
+        this.name = EnvironmentImportPendingError.ErrorName
+    }
+}
 
 export class InMemoryEnvironmentProvisioning implements IEnvironmentProvisioning
 {
@@ -198,6 +214,10 @@ export class EnvironmentRegistry
         if (disposing !== undefined)
         {
             await disposing
+        }
+        if (await EnvServerImport.PendingIn(this.platform.Database, new EnvServerImportSource(this.platform.CreateStorage(this.baseDir)), environmentId))
+        {
+            throw new EnvironmentImportPendingError()
         }
         if (!await this.ownership.Acquire(environmentId))
         {
