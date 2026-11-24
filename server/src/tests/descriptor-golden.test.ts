@@ -9,7 +9,7 @@ import { Components } from '../release-components.js'
 /** The pragmatic-server golden this repository's descriptor must keep (admin/control-plane/descriptors/digests.json there). */
 class DescriptorGolden
 {
-    public static readonly Digest = 'sha256:4eb083d79e78bd84cd0d3844c6ea1bdd9d69deff021e17a376c765a09d507a22'
+    public static readonly Digest = 'sha256:4ffdd3b2e19fd5a6ad36d651c6906298019c3686782f26104f98e5c2ebff48a8'
     public static readonly Manifest = join(import.meta.dirname, '..', '..', 'package.json')
     public static readonly Utf8 = 'utf8'
 

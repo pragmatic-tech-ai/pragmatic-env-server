@@ -9,7 +9,7 @@ export class EnvServerComponent
 {
     public static readonly Name = 'pragmatic-env-server'
     /** The descriptor version: this application's package version (the release test pins it to package.json). */
-    public static readonly Version = '0.1.0'
+    public static readonly Version = '0.1.1'
 
     private static readonly Declaration: ComponentDeclaration = {
         name: EnvServerComponent.Name,

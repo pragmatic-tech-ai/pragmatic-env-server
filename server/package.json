@@ -1,6 +1,6 @@
 {
   "name": "@pragmatic-tech-ai/pragmatic-env-server-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "Apache-2.0",
   "description": "The env server (pragmatic-serverd) and its worker (pragmatic-workerd): the pragmatic-env-server image's code. Its version is the component descriptor's.",
