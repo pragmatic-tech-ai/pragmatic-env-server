@@ -2,5 +2,5 @@
  *  at every descriptor change; the platform release and the tenant admin console's catalogue carry the same digest). */
 export class EnvServerDescriptorPin
 {
-    public static readonly Digest = 'sha256:5ae7c6eff73a06cfb85fbc8d83b5cd9e2d6aaeaf11c40a0ac246f440ff9a965a'
+    public static readonly Digest = 'sha256:5e35f9ea043a94415bae2e91821db3f099162c9a005de1c3e367ac8f24b883d4'
 }

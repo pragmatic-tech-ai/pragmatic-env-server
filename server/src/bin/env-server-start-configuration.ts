@@ -19,8 +19,9 @@ import { EnvServerTuningBounds } from './env-server-tuning-bounds.js'
  * configuration the server cannot run with refuses the start with exit 78 (the watched roll then reverts it) instead of
  * starting broken or failing later with exit 1:
  *
- * - a configured value outside its bound (`EnvServerTuningBounds`: a sweep or heartbeat that would spin, a drain longer
- *   than the pod's grace period);
+ * - a configured value outside its declared bound is refused by the shared step itself (the descriptor's `minimum` and
+ *   `maximum`, EnvServerSettingBounds: a sweep or heartbeat that would spin, a drain longer than the pod's grace period);
+ *   what the bounds cannot state, a soft backpressure limit above the hard one, is checked here (`EnvServerTuningBounds`);
  * - a configured value the settings loader refuses (a rate without its burst, a sampling ratio above 1, a default page
  *   size above the largest): the loader is run on the environment as rendered and as configured, and only a refusal the
  *   configuration caused is the configuration's.

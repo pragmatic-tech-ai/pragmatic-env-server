@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { OptionDescriptor } from '@pragmatic-tech-ai/pragmatic-component'
+import { ConfigurationErrorCode, ConfigurationValidator, type OptionDescriptor } from '@pragmatic-tech-ai/pragmatic-component'
+import { ComponentTermination } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
 import { EnvServerComponent } from '../env-server-component.js'
+import { EnvServerSettingBounds } from '../env-server-setting-bounds.js'
 import { ComponentGolden } from '../../component/tests/component-golden.js'
 import { ComponentSources } from '../../component/tests/component-sources.js'
 import { EnvServerDescriptorPin } from './env-server-descriptor-pin.js'
@@ -94,6 +96,27 @@ describe('EnvServerComponent', () =>
     it('pins the descriptor: golden JSON and content digest', () =>
     {
         ComponentGolden.Check(EnvServerComponent.Descriptor(), EnvServerComponentFixture.Golden, EnvServerDescriptorPin.Digest)
+    })
+
+    it('declares the bounds of its timings and sizes, the drain inside the grace period the manifests render (one constant)', () =>
+    {
+        const descriptor = EnvServerComponent.Descriptor()
+        const bounded = descriptor.Options.flatMap(o => o.Settings.filter(s => s.Minimum !== undefined || s.Maximum !== undefined).map(s => [o.Name + '.' + s.Name, s.Minimum, s.Maximum]))
+        assert.deepEqual(bounded, [
+            ['core.idleTtlMs', 1000, 2147483647], ['core.idleSweepMs', 1000, 2147483647], ['core.drainTimeoutMs', 1, ComponentTermination.LongestDrainMs],
+            ['webSocket.heartbeatMs', 1000, 2147483647], ['webSocket.backpressureGraceMs', 1, 2147483647], ['webSocket.maxInboundBytes', 1, EnvServerSettingBounds.LargestInboundBytes],
+        ])
+        assert.deepEqual(bounded.map(b => b[0]), [...EnvServerSettingBounds.Bounded()])
+        assert.equal(EnvServerComponentFixture.Option('core').Setting('drainTimeoutMs')?.Default, ComponentTermination.LongestDrainMs)
+    })
+
+    it('a version outside a bound is refused by the descriptor (the console at save time, the start step at start)', () =>
+    {
+        const validation = new ConfigurationValidator(EnvServerComponent.Descriptor()).Validate({ options: { core: { drainTimeoutMs: ComponentTermination.LongestDrainMs + 1, idleSweepMs: 999 }, webSocket: { maxInboundBytes: 0 } } })
+        assert.deepEqual(validation.Errors.map(e => [e.Path, e.Code]), [
+            ['/options/core/drainTimeoutMs', ConfigurationErrorCode.AboveMaximum], ['/options/core/idleSweepMs', ConfigurationErrorCode.BelowMinimum],
+            ['/options/webSocket/maxInboundBytes', ConfigurationErrorCode.BelowMinimum],
+        ])
     })
 
     it('declares exactly the variables its configuration readers read', () =>

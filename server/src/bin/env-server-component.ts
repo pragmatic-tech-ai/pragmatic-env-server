@@ -1,5 +1,6 @@
 import { SettingType, type ComponentDescriptor, ComponentDeclarations, type ComponentDeclaration, type OptionDeclaration } from '@pragmatic-tech-ai/pragmatic-component'
 import { ServerOptionDeclarations } from '@pragmatic-tech-ai/pragmatic-env-cluster'
+import { EnvServerSettingBounds } from './env-server-setting-bounds.js'
 
 /**
  * The component descriptor of the env server image (pragmatic-serverd, and pragmatic-workerd from the same image): the
@@ -7,7 +8,8 @@ import { ServerOptionDeclarations } from '@pragmatic-tech-ai/pragmatic-env-clust
  * (`EnvServerStartConfiguration`, first in both mains). Stores in Postgres (A5).
  *
  * One configuration is applied to every environment's env server of the tenant, so only tuning is declared: idle
- * unloading, drain, WebSocket limits, rate limits and paging (timings bounded at start, `EnvServerTuningBounds`). What
+ * unloading, drain, WebSocket limits, rate limits and paging (timings and sizes bounded on the descriptor,
+ * `EnvServerSettingBounds`; the backpressure pair at start, `EnvServerTuningBounds`). What
  * binds a server to its environment or to the platform (its listener, folders, environments, master key, database, Redis
  * and worker wiring, TLS, cloud resources, browser origins, the telemetry collector and identity, the access audit) is
  * rendered by the platform's manifests and left out (C3.1 ruling "platform-owned settings"), so no configuration can set
@@ -18,13 +20,16 @@ export class EnvServerComponent
 {
     public static readonly Name = 'pragmatic-env-server'
     /** The descriptor version: this application's package version (the release test pins it to package.json). */
-    public static readonly Version = '0.1.2'
+    public static readonly Version = '0.1.3'
     /** Read by the shared loader for the gateway; the env server's hosts never use it (their heartbeat closes silent sockets). */
     private static readonly UnusedReadIdleSetting = 'readIdleMs'
 
+    private static readonly CoreOption = 'core'
+
     private static readonly WebSocket: OptionDeclaration = {
         ...ServerOptionDeclarations.WebSocket,
-        settings: ServerOptionDeclarations.WebSocket.settings.filter(s => s.name !== EnvServerComponent.UnusedReadIdleSetting),
+        settings: EnvServerSettingBounds.Declared(ServerOptionDeclarations.WebSocket.name,
+            ServerOptionDeclarations.WebSocket.settings.filter(s => s.name !== EnvServerComponent.UnusedReadIdleSetting)),
     }
 
     /** The declaration: the descriptor, and the variable the start step overlays each configured setting onto. */
@@ -33,13 +38,13 @@ export class EnvServerComponent
         version: EnvServerComponent.Version,
         options: [
             {
-                name: 'core',
+                name: EnvServerComponent.CoreOption,
                 description: 'The server process: idle unloading of environments and the shutdown drain.',
-                settings: [
+                settings: EnvServerSettingBounds.Declared(EnvServerComponent.CoreOption, [
                     { name: 'idleTtlMs', type: SettingType.Integer, source: 'PRAGMATIC_IDLE_TTL_MS', description: 'An environment idle this many milliseconds is unloaded.' },
                     { name: 'idleSweepMs', type: SettingType.Integer, source: 'PRAGMATIC_IDLE_SWEEP_MS', description: 'Interval of the idle sweep in milliseconds.' },
-                    { name: 'drainTimeoutMs', type: SettingType.Integer, source: 'PRAGMATIC_DRAIN_TIMEOUT_MS', default: 25000, description: 'How long shutdown waits for connections to drain, in milliseconds.' },
-                ],
+                    { name: 'drainTimeoutMs', type: SettingType.Integer, source: 'PRAGMATIC_DRAIN_TIMEOUT_MS', default: EnvServerSettingBounds.LongestDrainMs, description: 'How long shutdown waits for connections to drain, in milliseconds.' },
+                ]),
             },
             ServerOptionDeclarations.RateLimit,
             EnvServerComponent.WebSocket,
