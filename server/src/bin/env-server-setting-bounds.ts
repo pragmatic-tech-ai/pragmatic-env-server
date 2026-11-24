@@ -29,6 +29,7 @@ export class EnvServerSettingBounds
     public static readonly LargestInboundBytes = 67108864
     public static readonly ShortestTimerMs = 1000
     public static readonly Smallest = 1
+    private static readonly NotDeclared = 'the shared webSocket option declares no setting '
     /** The names of the options and settings it bounds: their one home (the declaration names its core settings by them;
      *  the webSocket ones are the shared ServerOptionDeclarations'). */
     public static readonly Core = 'core'
@@ -36,9 +37,9 @@ export class EnvServerSettingBounds
     public static readonly IdleTtl = 'idleTtlMs'
     public static readonly IdleSweep = 'idleSweepMs'
     public static readonly DrainTimeout = 'drainTimeoutMs'
-    public static readonly Heartbeat = 'heartbeatMs'
-    public static readonly BackpressureGrace = 'backpressureGraceMs'
-    public static readonly MaxInbound = 'maxInboundBytes'
+    public static readonly Heartbeat = EnvServerSettingBounds.SharedWebSocketSetting('heartbeatMs')
+    public static readonly BackpressureGrace = EnvServerSettingBounds.SharedWebSocketSetting('backpressureGraceMs')
+    public static readonly MaxInbound = EnvServerSettingBounds.SharedWebSocketSetting('maxInboundBytes')
 
     private static readonly Bounds: ReadonlyMap<string, SettingBound> = EnvServerSettingBounds.Table()
 
@@ -60,6 +61,15 @@ export class EnvServerSettingBounds
             const bound = EnvServerSettingBounds.Bounds.get(ConfigurationEnvironmentOverlay.SettingName(option, setting.name))
             return bound === undefined ? setting : { ...setting, minimum: bound.Minimum, maximum: bound.Maximum }
         })
+    }
+
+    // A webSocket setting's name as the shared declaration has it: a rename there fails here, at load, instead of leaving
+    // a bound on a setting that no longer exists.
+    private static SharedWebSocketSetting(name: string): string
+    {
+        const declared = ServerOptionDeclarations.WebSocket.settings.find(s => s.name === name)
+        if (declared === undefined) throw new Error(EnvServerSettingBounds.NotDeclared + name)
+        return declared.name
     }
 
     private static Table(): ReadonlyMap<string, SettingBound>
