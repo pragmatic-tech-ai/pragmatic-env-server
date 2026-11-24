@@ -8,6 +8,7 @@ import {
     ConfigurationStartError,
     ConfigurationStartReason,
     type IStartProcess,
+    type SecretStoreDirectory,
 } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
 import { RealmSecretsDirectory } from '@pragmatic-tech-ai/pragmatic-configuration'
 import { ServerConfigLoader } from '@pragmatic-tech-ai/pragmatic-env-cluster'
@@ -58,6 +59,13 @@ export class EnvServerStartConfiguration
         return new EnvServerStartConfiguration(env, process, read).Run()
     }
 
+    /** The stores the start step resolves secret references through: `file` (the mounted Secret) and, when the hive has a
+     *  realm secrets home, `realm` (verified: a home that fails its check refuses the start, `secrets-home-unavailable`). */
+    public static Stores(env: Readonly<Record<string, string | undefined>>): Promise<SecretStoreDirectory>
+    {
+        return RealmSecretsDirectory.Stores(EnvServerComponent.Name, env)
+    }
+
     private static ReadText(path: string): string
     {
         return readFileSync(path, EnvServerStartConfiguration.Utf8)
@@ -69,9 +77,7 @@ export class EnvServerStartConfiguration
         let report: ComponentStartReport
         try
         {
-            // `file` (the mounted Secret) and, when the hive has a realm secrets home, `realm`.
-            const stores = await RealmSecretsDirectory.Stores(EnvServerComponent.Name, this.env)
-            report = await ComponentStartConfiguration.Apply({ Declaration: EnvServerComponent.Declaration, Env: this.env, Stores: stores })
+            report = await ComponentStartConfiguration.Apply({ Declaration: EnvServerComponent.Declaration, Env: this.env, Stores: await EnvServerStartConfiguration.Stores(this.env) })
         }
         catch (error)
         {
