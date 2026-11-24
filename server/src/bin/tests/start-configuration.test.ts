@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { SecretReference, SettingType } from '@pragmatic-tech-ai/pragmatic-component'
 import { AppliedConfiguration, ComponentStartConfiguration, ConfigurationStartError, ConfigurationStartReason, type IStartProcess } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
 import { randomBytes } from 'node:crypto'
+import { RealmSecretsDirectory } from '@pragmatic-tech-ai/pragmatic-configuration'
 import { CustomRealmSecrets, RealmSecretsMigrations, RealmSecretsSettings, SqlMigrationRunner, SqlSecretMigrations, WorkloadContext } from '@pragmatic-tech-ai/pragmatic-realm-adapters'
 import { SqlTestSessions, type SqlLiveTestDatabase } from '@pragmatic-tech-ai/pragmatic-realm-adapters/testing'
 import { ServerConfigLoader } from '@pragmatic-tech-ai/pragmatic-env-cluster'
@@ -112,7 +113,8 @@ class EnvServerStart
 /** The realm secrets home as the engine chart names it for the env server. */
 class RealmHomeCase
 {
-    public static readonly RealmStore = 'realm'
+    public static readonly RealmStore = RealmSecretsDirectory.RealmStore
+    public static readonly LiveUrlVariable = 'PRAGMATIC_TEST_PG_URL'
     public static readonly Name = 'probe'
     public static readonly Where = 'core.probe'
     public static readonly Realm = 'acme'
@@ -134,10 +136,10 @@ class RealmHomeCase
         const session = database.Session()
         await SqlMigrationRunner.Run(session, new SqlSecretMigrations())
         await SqlMigrationRunner.Run(session, new RealmSecretsMigrations())
-        await session.Execute("INSERT INTO realm_secret_grants (role_name, realm_id, writer) VALUES (current_user, 'acme', true)", [])
+        await session.Execute('INSERT INTO realm_secret_grants (role_name, realm_id, writer) VALUES (current_user, $1, true)', [RealmHomeCase.Realm])
         const key = randomBytes(32)
         await CustomRealmSecrets.Over(session, key, RealmHomeCase.Realm, true).Put(RealmHomeCase.Name, 'live-value')
-        const url = new URL(process.env.PRAGMATIC_TEST_PG_URL!)
+        const url = new URL(process.env[RealmHomeCase.LiveUrlVariable]!)
         url.searchParams.set('options', `-c search_path=${database.Schema}`)
         await writeFile(join(folder, 'database-url'), url.toString())
         await writeFile(join(folder, 'master-key'), key)
@@ -155,13 +157,20 @@ SqlTestSessions.DescribeLive('the env server resolves realm references', makeDat
     it('[live] a realm reference resolves through the realm secrets home the start step builds', async () =>
     {
         const database = await makeDatabase()
-        await EnvServerStart.InFolder(async folder =>
+        try
         {
-            const R = RealmHomeCase
-            const stores = await EnvServerStartConfiguration.Stores(await R.Custom(database, folder))
-            assert.equal((await stores.Resolve(new SecretReference(R.RealmStore, R.Name), R.Where)).Reveal(), 'live-value')
-        })
-        await database.Dispose()
+            await EnvServerStart.InFolder(async folder =>
+            {
+                const R = RealmHomeCase
+                // The home's pool ends on its own when idle (allowExitOnIdle).
+                const stores = await EnvServerStartConfiguration.Stores(await R.Custom(database, folder))
+                assert.equal((await stores.Resolve(new SecretReference(R.RealmStore, R.Name), R.Where)).Reveal(), 'live-value')
+            })
+        }
+        finally
+        {
+            await database.Dispose()
+        }
     })
 })
 
