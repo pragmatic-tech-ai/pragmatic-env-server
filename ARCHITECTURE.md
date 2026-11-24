@@ -16,7 +16,7 @@
 ## Entry points
 
 - **Programmatic:** `PragmaticServer` (`src/pragmatic-server.ts`) — `Start` / `OpenSolution(dir)` / `Manager()` / `LanguageService()` / `DevEngine()` / `DevScopes()` / `DevCypher()` / `DevModelView()` / `DevExecute()` / `DevConnectors()` / `Dispose`; runtime: `EnvironmentEngine()` / `EnvironmentScopes()` / `EnvironmentCypher()` / `EnvironmentExecute()` / `EnvironmentConnectors()` / `EnvironmentModelView()` / `DataChanges()`.
-- **Process:** `bin` entry via `ServerBootstrap` (`src/bin/server-bootstrap.ts`) + `ServerConfigLoader` (pragmatic-env-cluster) — env+file config, fail-closed; SIGTERM graceful shutdown.
+- **Process:** `bin` entry via `ServerBootstrap` (`src/bin/server-bootstrap.ts`) + `ServerConfigLoader` (pragmatic-env-cluster) — env+file config, fail-closed; SIGTERM graceful shutdown. Both mains first run `ComponentStartConfiguration.ApplyOrExit` (pragmatic-configuration-runtime, C3.1): the applied `pragmatic-config-pragmatic-env-server` is laid over the environment before the loader reads it (exit 78 on a configuration that refuses the start); the declaration (`src/bin/env-server-component.ts`) holds tuning only, every platform-owned variable is listed with its reason in `env-server-component.test.ts`.
 - **Host:** `PragmaticServerHost` (`src/host/pragmatic-server-host.ts`) — one server over a `ws` `WebSocketServer({ noServer: true })`; `StartAsync` / `DisposeAsync`. WorkerHost variant for multi-environment workers.
 
 ## HTTP and transport surface

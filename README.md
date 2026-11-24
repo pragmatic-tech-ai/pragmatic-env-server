@@ -16,6 +16,14 @@ Seeded from pragmatic-server@2a2e8138 (dev-kit A3 Task 9); the map is [ARCHITECT
 - `docker-compose.yml` and `docker/docker-compose.cluster.yml` run the released images (env-server; the cluster file adds
   two workers and the pragmatic-env-gateway image) for local development (`docker/compose-README.md`).
 
+## Configuration
+
+The server and the worker read `PRAGMATIC_*` variables (`ServerConfigLoader.Load`). At start, first of all, the mounted
+`pragmatic-config-pragmatic-env-server` (the tenant admin console's applied configuration) is laid over them; one the
+server cannot start with exits 78 with the reason. The tenant may tune only what `server/src/bin/env-server-component.ts`
+declares (idle unloading, drain, WebSocket limits, rate limits, paging, trace export): everything that wires a server to
+its environment or the platform is rendered by the manifests and cannot be configured.
+
 ## Build and test
 
 Every `@pragmatic-tech-ai` package comes from GitHub Packages: `.npmrc` reads the token from `NODE_AUTH_TOKEN`
