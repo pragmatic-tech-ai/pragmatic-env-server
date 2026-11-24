@@ -21,9 +21,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pg": "^8.13.0",
+    "mongodb": "^6.12.0",
     "neo4j-driver": "^5.27.0",
-    "mongodb": "^6.12.0"
+    "pg": "^8.13.0"
   },
   "peerDependencies": {
     "@pragmatic-tech-ai/todl": "^0.66.5",

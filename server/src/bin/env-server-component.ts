@@ -20,7 +20,7 @@ export class EnvServerComponent
 {
     public static readonly Name = 'pragmatic-env-server'
     /** The descriptor version: this application's package version (the release test pins it to package.json). */
-    public static readonly Version = '0.1.3'
+    public static readonly Version = '0.1.4'
     /** Read by the shared loader for the gateway; the env server's hosts never use it (their heartbeat closes silent sockets). */
     private static readonly UnusedReadIdleSetting = 'readIdleMs'
 

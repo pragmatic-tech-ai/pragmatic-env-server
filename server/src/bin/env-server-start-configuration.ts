@@ -9,6 +9,7 @@ import {
     ConfigurationStartReason,
     type IStartProcess,
 } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
+import { RealmSecretsDirectory } from '@pragmatic-tech-ai/pragmatic-configuration'
 import { ServerConfigLoader } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { EnvServerComponent } from './env-server-component.js'
 import { EnvServerTuningBounds } from './env-server-tuning-bounds.js'
@@ -25,6 +26,9 @@ import { EnvServerTuningBounds } from './env-server-tuning-bounds.js'
  * - a configured value the settings loader refuses (a rate without its burst, a sampling ratio above 1, a default page
  *   size above the largest): the loader is run on the environment as rendered and as configured, and only a refusal the
  *   configuration caused is the configuration's.
+ *
+ * Secret references resolve through `file` (the component's mounted Secret) and, when the engine chart names the hive's
+ * realm secrets option, `realm` (the realm's secrets home, RealmSecretsDirectory).
  *
  * An applied file validated for 0.1.0 or 0.1.1 (versions that never read their configuration, so no image ever ran it)
  * with no entry prepared for this descriptor is not a reason to stop: the server starts as rendered, as those versions
@@ -65,7 +69,9 @@ export class EnvServerStartConfiguration
         let report: ComponentStartReport
         try
         {
-            report = await ComponentStartConfiguration.Apply({ Declaration: EnvServerComponent.Declaration, Env: this.env })
+            // `file` (the mounted Secret) and, when the hive has a realm secrets home, `realm`.
+            const stores = await RealmSecretsDirectory.Stores(EnvServerComponent.Name, this.env)
+            report = await ComponentStartConfiguration.Apply({ Declaration: EnvServerComponent.Declaration, Env: this.env, Stores: stores })
         }
         catch (error)
         {

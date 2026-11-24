@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "@pragmatic-tech-ai/pragmatic-graph": "^0.6.0",
-    "@pragmatic-tech-ai/pragmatic-identity": "^0.18.12"
+    "@pragmatic-tech-ai/pragmatic-identity": "^0.19.0"
   },
   "peerDependencies": {
     "@pragmatic-tech-ai/todl": "^0.66.5"

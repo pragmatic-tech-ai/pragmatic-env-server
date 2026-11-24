@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SettingType } from '@pragmatic-tech-ai/pragmatic-component'
-import { AppliedConfiguration, ComponentStartConfiguration, type IStartProcess } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
+import { AppliedConfiguration, ComponentStartConfiguration, SecretStoreDirectory, type IStartProcess } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
+import { RealmSecretsDirectory } from '@pragmatic-tech-ai/pragmatic-configuration'
 import { ServerConfigLoader } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 import { EnvServerComponent } from '../env-server-component.js'
 import { EnvServerStartConfiguration } from '../env-server-start-configuration.js'
@@ -161,6 +162,33 @@ describe('the env server reads its configuration at start', () =>
         assert.equal((await EnvServerStartConfiguration.ApplyOrExit(env, new ExitRecorder(), EnvServerStart.NoFile)).Applied, false)
         assert.deepEqual(env, before)
         assert.equal(ServerConfigLoader.Load(env, EnvServerStart.NoFile).idleTtlMs, 1000)
+    })
+
+    it('a realm reference resolves through the realm secrets home: the directory gains `realm` when the chart names an option', async () =>
+    {
+        await EnvServerStart.InFolder(async folder =>
+        {
+            const token = join(folder, 'token')
+            await writeFile(token, 'projected.jwt')
+            const realm = {
+                PRAGMATIC_REALM_SECRETS_OPTION: 'gcp', PRAGMATIC_REALM_SECRETS_PROJECT_ID: 'pragmatic-ops',
+                PRAGMATIC_REALM_SECRETS_WORKLOAD_IDENTITY_AUDIENCE: '//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pragmatic-hives/providers/customer',
+                PRAGMATIC_REALM_ID: 'acme', PRAGMATIC_WORKLOAD_TOKEN_FILE: token,
+            }
+            const directory = await RealmSecretsDirectory.Stores(EnvServerComponent.Name, realm)
+            const store = await RealmSecretsDirectory.RealmStoreFor(EnvServerComponent.Name, realm)
+            assert.equal(store?.constructor.name, 'GcpRealmSecretStore')
+            assert.ok(directory instanceof SecretStoreDirectory)
+            // The start step builds that directory: a configuration starts with a reachable home ...
+            const env = { ...EnvServerStart.Env(await EnvServerStart.Configuration(folder, { core: { idleTtlMs: 600000 } })), ...realm }
+            assert.equal((await EnvServerStartConfiguration.ApplyOrExit(env, new ExitRecorder(), EnvServerStart.NoFile)).Version, 1)
+            // ... and a home that fails its check (no projected token) refuses the start with exit 78.
+            const exits = new ExitRecorder()
+            const refused = { ...env, PRAGMATIC_WORKLOAD_TOKEN_FILE: join(folder, 'no-token') }
+            await assert.rejects(EnvServerStartConfiguration.ApplyOrExit(refused, exits, EnvServerStart.NoFile))
+            assert.equal(exits.Code, 78)
+            assert.match(exits.Text, /\(gcp\) token-unreadable.*\(secrets-home-unavailable\)/)
+        })
     })
 
     it('an invalid configuration exits with the start error code 78 and the reason', async () =>
