@@ -115,6 +115,22 @@ SqlTestSessions.Describe('PragmaticAppsRegistry', (makeSession, label) =>
             await assert.rejects(registry.Claim(AppsFixture.Manifest('demo', '1.0.0'), 'digest-a'), AppVersionConflictError, 'a committed version cannot be claimed')
         })
 
+        it('a crashed attempt\'s claim expires: after ClaimTtlMs another digest may claim and commit the version', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const records = AppsFixture.Records(database)
+            const stale = new Date(Date.now() - PragmaticAppsRegistry.ClaimTtlMs - 1_000).toISOString()
+            await records.Put({ id: 'demo', live: null, versions: {}, claims: { '1.0.0': { digest: 'crashed', at: stale } } })
+            const registry = AppsFixture.Registry(database)
+            await registry.Claim(AppsFixture.Manifest('demo', '1.0.0'), 'retry')
+            await registry.Commit(AppsFixture.Manifest('demo', '1.0.0'), 'retry')
+            assert.equal(await registry.LiveVersion('demo'), '1.0.0')
+            // A fresh claim of another digest still holds.
+            await records.Put({ id: 'other', live: null, versions: {}, claims: { '1.0.0': { digest: 'running', at: new Date().toISOString() } } })
+            await assert.rejects(registry.Claim(AppsFixture.Manifest('other', '1.0.0'), 'retry'), AppVersionConflictError)
+            await assert.rejects(registry.Commit(AppsFixture.Manifest('other', '1.0.0'), 'retry'), AppVersionConflictError)
+        })
+
         it('ReleaseClaim drops only its own digest\'s claim', async () =>
         {
             const database = EnvServerDatabase.Over(await makeSession())

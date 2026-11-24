@@ -96,7 +96,7 @@ export class AppIngestService
     private static readonly AssetMessage = 'a manifest UI asset is not part of the UI bundle'
     private static readonly WriteFailedMessage = 'the application could not be written'
     private static readonly ListSeparator = ', '
-    private static readonly VersionExistsMessage = 'this application version is already deployed; versions are immutable'
+    private static readonly VersionExistsMessage = AppVersionConflictError.Message
     private static readonly PackageDiffersMessage = 'a package version is already deployed with different content; versions are immutable'
     private static readonly WriteFailedLine = 'app ingest write failed'
     private static readonly ErrorClassField = 'errorClass'

@@ -14,6 +14,7 @@ import { SecurityChangeLog, type SecurityChangeLogRecord } from '../host/environ
 import { PendingBackfillStore, type PendingBackfillRecord } from '../host/environment/pending-backfill-store.js'
 import { PromoteRecordStore, type PromoteRecord } from '../host/environment/promote-record-store.js'
 import type { ApplicationRecord } from '../host/apps/pragmatic-apps-registry.js'
+import { ApplicationFiles } from '../host/apps/application-files.js'
 import { PragmaticAppManifestParser, type PragmaticAppManifest } from '../host/apps/pragmatic-app-manifest.js'
 import { SqlIdentityStoreSet } from '../platform/sql-identity-store-set.js'
 import { EnvServerDatabase } from './env-server-database.js'
@@ -122,8 +123,8 @@ export class EnvServerImport
     public static readonly PendingBackfillFile = 'pending-backfill.json'
     public static readonly LoadedGraphFile = 'loaded-graph.json'
     public static readonly GraphFiles: readonly string[] = [EnvServerImport.DevGraphsFile, EnvServerImport.SecurityChangesFile, EnvServerImport.PendingBackfillFile, EnvServerImport.LoadedGraphFile]
-    public static readonly ManifestFile = 'application.json'
-    public static readonly LivePointerFile = 'live'
+    public static readonly ManifestFile = ApplicationFiles.ManifestFile
+    public static readonly LivePointerFile = ApplicationFiles.LiveFile
     private static readonly Root = ''
     private static readonly HiddenPrefix = '.'
     private static readonly ModuleName = 'env-server-import'
@@ -191,7 +192,13 @@ export class EnvServerImport
                 pending.push(environmentId)
             }
         }
-        return pending.length === 0 ? undefined : this.Import(pending, false, true)
+        if (pending.length === 0)
+        {
+            return undefined
+        }
+        const report = await this.Import(pending, false, true)
+        // Every pending environment was finished by another replica while this one waited: nothing was imported here.
+        return report.Environments.length === 0 && report.Failed.length === 0 ? undefined : report
     }
 
     /** Imports every environment folder that holds pre-A5 data; refuses environments the database already holds records

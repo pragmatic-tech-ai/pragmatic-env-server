@@ -8,17 +8,19 @@ import { PragmaticApplication } from './pragmatic-application.js'
  *  already live. Versions are immutable. */
 export class AppVersionConflictError extends Error
 {
+    /** The reason a refused deploy answers (the ingest's in-memory checks answer the same). */
+    public static readonly Message = 'this application version is already deployed; versions are immutable'
     private static readonly ErrorName = 'AppVersionConflictError'
-    private static readonly Text = 'this application version is already deployed; versions are immutable'
 
     public constructor()
     {
-        super(AppVersionConflictError.Text)
+        super(AppVersionConflictError.Message)
         this.name = AppVersionConflictError.ErrorName
     }
 }
 
-/** An ingest's claim on a version it is about to write the UI files of: the digest of its manifest and files. */
+/** An ingest's claim on a version it is about to write the UI files of: the digest of its manifest and files, and when
+ *  it was made (a claim older than PragmaticAppsRegistry.ClaimTtlMs is a crashed attempt's and may be replaced). */
 export type ApplicationClaim = { digest: string; at: string }
 
 export interface PragmaticAppSummary
@@ -41,7 +43,12 @@ export type ApplicationRecord = { id: string; live: string | null; versions: Rec
  *
  * Versions are immutable across workers too: an ingest first claims the version with the digest of its content
  * (`Claim`, before it writes any UI file), and the commit re-checks inside the optimistic update, so of two writers of
- * one name@version exactly one commits and the other gets AppVersionConflictError, never a mix of their files.
+ * one name@version exactly one commits and the other gets AppVersionConflictError, never a mix of their files. A failed
+ * attempt releases its claim; a crashed one's expires after ClaimTtlMs.
+ *
+ * `TakeUnpacked` refuses a version the database committed with other content (immutable): an unpacker roll back to an
+ * older version rewrites its manifest with the current packages, so such a roll back is refused and logged (redeploy
+ * it as a new version).
  *
  * With the applications' handoff files (ApplicationFiles: the in-cluster UI unpacker's contract), `TakeUnpacked` takes a
  * version the unpacker made live into the database at start, and every commit mirrors the live manifest back.
@@ -62,6 +69,9 @@ export class PragmaticAppsRegistry
     private static readonly ObjectClose = '}'
     private static readonly JsonComma = ','
     private static readonly JsonColon = ':'
+    /** How long a claim holds against another digest: longer than any ingest's UI write, so only a crashed attempt's
+     *  claim (its worker died before the commit or the release) is ever replaced. */
+    public static readonly ClaimTtlMs = 15 * 60_000
     private static readonly MirrorFailedLine = 'the live application manifest could not be mirrored to the unpacker handoff files: '
     private static readonly UnknownErrorName = 'UnknownError'
 
@@ -141,7 +151,7 @@ export class PragmaticAppsRegistry
         await this.records.Update(manifest.name, current =>
         {
             const claim = current?.claims?.[manifest.version]
-            if ((current !== undefined && Object.hasOwn(current.versions ?? {}, manifest.version)) || (claim !== undefined && claim.digest !== digest))
+            if ((current !== undefined && Object.hasOwn(current.versions ?? {}, manifest.version)) || (claim !== undefined && claim.digest !== digest && !PragmaticAppsRegistry.Expired(claim)))
             {
                 throw new AppVersionConflictError()
             }
@@ -183,7 +193,7 @@ export class PragmaticAppsRegistry
                 throw new AppVersionConflictError()
             }
             const claim = current?.claims?.[manifest.version]
-            if (claim !== undefined && claim.digest !== digest)
+            if (claim !== undefined && claim.digest !== digest && !PragmaticAppsRegistry.Expired(claim))
             {
                 throw new AppVersionConflictError()
             }
@@ -291,6 +301,13 @@ export class PragmaticAppsRegistry
         }
         // Only while it is still the live version: a concurrent commit of another version mirrors (and records) its own.
         await this.records.Update(name, current => (current === undefined || current.live !== manifest.version ? current : { ...current, unpacked: manifest.version }))
+    }
+
+    /** A claim older than ClaimTtlMs (or with an unreadable time): its attempt crashed. */
+    private static Expired(claim: ApplicationClaim): boolean
+    {
+        const at = Date.parse(claim.at)
+        return !(at > Date.now() - PragmaticAppsRegistry.ClaimTtlMs)
     }
 
     private static WithoutEmptyClaims(record: ApplicationRecord): ApplicationRecord

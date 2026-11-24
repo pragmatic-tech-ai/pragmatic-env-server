@@ -238,6 +238,18 @@ SqlTestSessions.Describe('EnvServerImport', (makeSession, label) =>
             assert.equal(await new EnvServerImport(database, new NodeFsStorage(missing), ImportFixture.Key).ImportIfPending(), undefined)
         })
 
+        it('a storage that cannot answer fails the import and the pending check (never read as holding no pre-A5 data)', async () =>
+        {
+            const database = EnvServerDatabase.Over(await makeSession())
+            const storage = new NodeFsStorage(ImportFixture.BaseDir())
+            const broken = new Error('storage unreachable')
+            storage.List = () => Promise.reject(broken)
+            storage.Exists = () => Promise.reject(broken)
+            const importer = new EnvServerImport(database, storage, ImportFixture.Key)
+            await assert.rejects(importer.ImportIfPending(), /storage unreachable/)
+            await assert.rejects(importer.IsPending(ImportFixture.Dev), /storage unreachable/)
+        })
+
         it('application handoff files alone (the unpacker\'s, written after A5 too) do not make an environment pending', async () =>
         {
             const database = EnvServerDatabase.Over(await makeSession())
@@ -356,6 +368,10 @@ SqlTestSessions.DescribeLive('EnvServerImport', makeDatabase =>
             const reports = await Promise.all([1, 2].map(() => new EnvServerImport(EnvServerDatabase.Over(live.Session()), new NodeFsStorage(baseDir), ImportFixture.Key).ImportIfPending()))
             const database = EnvServerDatabase.Over(live.Session())
             const environments = reports.flatMap(report => report?.Environments ?? []).sort()
+            for (const report of reports)
+            {
+                assert.ok(report === undefined || report.Environments.length + report.Failed.length > 0, 'a replica that imported nothing answers no report')
+            }
             assert.deepEqual(environments, [ImportFixture.Dev, ImportFixture.Runtime], 'each environment reported once')
             const state = await database.Records<{ id: string; importedAt: string }>(EnvServerRegistry.Import)
             const importedAt = (await state.Get(EnvServerImport.StatePrefix + ImportFixture.Dev))?.importedAt

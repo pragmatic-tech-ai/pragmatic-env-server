@@ -68,24 +68,13 @@ export class EnvServerImportSource
         catch (error)
         {
             // A folder that does not exist lists as empty (an object store lists a missing prefix as empty anyway), the
-            // base folder included (a fresh deployment has none yet).
-            if (!await this.ExistsQuietly(path))
+            // base folder included (a fresh deployment has none yet). A storage that cannot answer fails the call (an
+            // Exists that throws propagates): an unreadable environment must never look as if it held no pre-A5 data.
+            if (!await this.storage.Exists(path))
             {
                 return []
             }
             throw error
-        }
-    }
-
-    private async ExistsQuietly(path: string): Promise<boolean>
-    {
-        try
-        {
-            return await this.storage.Exists(path)
-        }
-        catch
-        {
-            return false
         }
     }
 }
