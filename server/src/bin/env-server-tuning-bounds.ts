@@ -1,5 +1,6 @@
 import { ConfigurationEnvironmentOverlay } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
 import { EnvServerComponent } from './env-server-component.js'
+import { EnvServerSettingBounds } from './env-server-setting-bounds.js'
 
 /**
  * What the descriptor's bounds cannot state: the soft backpressure limit at most the hard one, or a slow connection would be
@@ -9,7 +10,6 @@ import { EnvServerComponent } from './env-server-component.js'
  */
 export class EnvServerTuningBounds
 {
-    private static readonly WebSocket = 'webSocket'
     private static readonly SoftBytes = 'backpressureSoftBytes'
     private static readonly HardBytes = 'backpressureHardBytes'
     private static readonly Configured = 'configured'
@@ -24,7 +24,7 @@ export class EnvServerTuningBounds
     public static Paired(): readonly string[]
     {
         const B = EnvServerTuningBounds
-        return [B.Name(B.WebSocket, B.SoftBytes), B.Name(B.WebSocket, B.HardBytes)]
+        return [B.Name(EnvServerSettingBounds.WebSocket, B.SoftBytes), B.Name(EnvServerSettingBounds.WebSocket, B.HardBytes)]
     }
 
     /** Why the configured backpressure pair cannot run, or undefined when it can (or neither is configured). */
@@ -45,7 +45,7 @@ export class EnvServerTuningBounds
     private static Effective(env: NodeJS.ProcessEnv, setting: string): number
     {
         const declared = EnvServerComponent.Declaration.options
-            .find(option => option.name === EnvServerTuningBounds.WebSocket)!.settings
+            .find(option => option.name === EnvServerSettingBounds.WebSocket)!.settings
             .find(candidate => candidate.name === setting)!
         const text = env[declared.source!]
         return text === undefined || text === '' ? Number(declared.default) : Number(text)

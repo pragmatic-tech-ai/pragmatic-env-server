@@ -110,6 +110,14 @@ describe('EnvServerComponent', () =>
         assert.equal(EnvServerComponentFixture.Option('core').Setting('drainTimeoutMs')?.Default, ComponentTermination.LongestDrainMs)
     })
 
+    it('the bounded options and settings are named from one home (review M7)', () =>
+    {
+        const B = EnvServerSettingBounds
+        assert.deepEqual(EnvServerComponentFixture.Option(B.Core).Settings.slice(0, 3).map(s => s.Name), [B.IdleTtl, B.IdleSweep, B.DrainTimeout])
+        assert.equal(B.WebSocket, 'webSocket')
+        assert.ok([B.Heartbeat, B.BackpressureGrace, B.MaxInbound].every(name => EnvServerComponentFixture.Option(B.WebSocket).Settings.some(s => s.Name === name)))
+    })
+
     it('a version outside a bound is refused by the descriptor (the console at save time, the start step at start)', () =>
     {
         const validation = new ConfigurationValidator(EnvServerComponent.Descriptor()).Validate({ options: { core: { drainTimeoutMs: ComponentTermination.LongestDrainMs + 1, idleSweepMs: 999 }, webSocket: { maxInboundBytes: 0 } } })

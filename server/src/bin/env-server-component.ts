@@ -24,11 +24,9 @@ export class EnvServerComponent
     /** Read by the shared loader for the gateway; the env server's hosts never use it (their heartbeat closes silent sockets). */
     private static readonly UnusedReadIdleSetting = 'readIdleMs'
 
-    private static readonly CoreOption = 'core'
-
     private static readonly WebSocket: OptionDeclaration = {
         ...ServerOptionDeclarations.WebSocket,
-        settings: EnvServerSettingBounds.Declared(ServerOptionDeclarations.WebSocket.name,
+        settings: EnvServerSettingBounds.Declared(EnvServerSettingBounds.WebSocket,
             ServerOptionDeclarations.WebSocket.settings.filter(s => s.name !== EnvServerComponent.UnusedReadIdleSetting)),
     }
 
@@ -38,12 +36,12 @@ export class EnvServerComponent
         version: EnvServerComponent.Version,
         options: [
             {
-                name: EnvServerComponent.CoreOption,
+                name: EnvServerSettingBounds.Core,
                 description: 'The server process: idle unloading of environments and the shutdown drain.',
-                settings: EnvServerSettingBounds.Declared(EnvServerComponent.CoreOption, [
-                    { name: 'idleTtlMs', type: SettingType.Integer, source: 'PRAGMATIC_IDLE_TTL_MS', description: 'An environment idle this many milliseconds is unloaded.' },
-                    { name: 'idleSweepMs', type: SettingType.Integer, source: 'PRAGMATIC_IDLE_SWEEP_MS', description: 'Interval of the idle sweep in milliseconds.' },
-                    { name: 'drainTimeoutMs', type: SettingType.Integer, source: 'PRAGMATIC_DRAIN_TIMEOUT_MS', default: EnvServerSettingBounds.LongestDrainMs, description: 'How long shutdown waits for connections to drain, in milliseconds.' },
+                settings: EnvServerSettingBounds.Declared(EnvServerSettingBounds.Core, [
+                    { name: EnvServerSettingBounds.IdleTtl, type: SettingType.Integer, source: 'PRAGMATIC_IDLE_TTL_MS', description: 'An environment idle this many milliseconds is unloaded.' },
+                    { name: EnvServerSettingBounds.IdleSweep, type: SettingType.Integer, source: 'PRAGMATIC_IDLE_SWEEP_MS', description: 'Interval of the idle sweep in milliseconds.' },
+                    { name: EnvServerSettingBounds.DrainTimeout, type: SettingType.Integer, source: 'PRAGMATIC_DRAIN_TIMEOUT_MS', default: EnvServerSettingBounds.LongestDrainMs, description: 'How long shutdown waits for connections to drain, in milliseconds.' },
                 ]),
             },
             ServerOptionDeclarations.RateLimit,

@@ -1,5 +1,6 @@
 import type { SettingDeclaration } from '@pragmatic-tech-ai/pragmatic-component'
 import { ComponentTermination, ConfigurationEnvironmentOverlay } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
+import { ServerOptionDeclarations } from '@pragmatic-tech-ai/pragmatic-env-cluster'
 
 /** One configured integer's accepted range (inclusive). */
 class SettingBound
@@ -28,14 +29,16 @@ export class EnvServerSettingBounds
     public static readonly LargestInboundBytes = 67108864
     public static readonly ShortestTimerMs = 1000
     public static readonly Smallest = 1
-    private static readonly Core = 'core'
-    private static readonly WebSocket = 'webSocket'
-    private static readonly IdleTtl = 'idleTtlMs'
-    private static readonly IdleSweep = 'idleSweepMs'
-    private static readonly DrainTimeout = 'drainTimeoutMs'
-    private static readonly Heartbeat = 'heartbeatMs'
-    private static readonly BackpressureGrace = 'backpressureGraceMs'
-    private static readonly MaxInbound = 'maxInboundBytes'
+    /** The names of the options and settings it bounds: their one home (the declaration names its core settings by them;
+     *  the webSocket ones are the shared ServerOptionDeclarations'). */
+    public static readonly Core = 'core'
+    public static readonly WebSocket = ServerOptionDeclarations.WebSocket.name
+    public static readonly IdleTtl = 'idleTtlMs'
+    public static readonly IdleSweep = 'idleSweepMs'
+    public static readonly DrainTimeout = 'drainTimeoutMs'
+    public static readonly Heartbeat = 'heartbeatMs'
+    public static readonly BackpressureGrace = 'backpressureGraceMs'
+    public static readonly MaxInbound = 'maxInboundBytes'
 
     private static readonly Bounds: ReadonlyMap<string, SettingBound> = EnvServerSettingBounds.Table()
 
