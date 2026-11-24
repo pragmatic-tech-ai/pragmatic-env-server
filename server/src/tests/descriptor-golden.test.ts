@@ -5,11 +5,11 @@ import { describe, it } from 'node:test'
 import { ReleaseApp } from '@pragmatic-tech-ai/pragmatic-release-toolkit'
 import { EnvServerComponent } from '../bin/env-server-component.js'
 import { Components } from '../release-components.js'
+import { EnvServerDescriptorPin } from '../bin/tests/env-server-descriptor-pin.js'
 
-/** The pragmatic-server golden this repository's descriptor must keep (admin/control-plane/descriptors/digests.json there). */
+/** The release descriptor: the digest it must keep (EnvServerDescriptorPin) and the version of the manifest the release tag checks. */
 class DescriptorGolden
 {
-    public static readonly Digest = 'sha256:d2c7d32fea0fb390b680a08984f2fe7354c041fc70470d55d6984ac259151e8d'
     public static readonly Manifest = join(import.meta.dirname, '..', '..', 'package.json')
     public static readonly Utf8 = 'utf8'
 
@@ -21,9 +21,9 @@ class DescriptorGolden
 
 describe('the release descriptor', () =>
 {
-    it('has the pragmatic-server golden digest', () =>
+    it('has the pinned descriptor digest', () =>
     {
-        assert.equal(Components.Of(ReleaseApp.EnvServer).ContentDigest(), DescriptorGolden.Digest)
+        assert.equal(Components.Of(ReleaseApp.EnvServer).ContentDigest(), EnvServerDescriptorPin.Digest)
     })
 
     it('is the one component this repository releases', () =>

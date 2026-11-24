@@ -32,48 +32,6 @@
       ]
     },
     {
-      "name": "observability",
-      "description": "Metrics and traces.",
-      "settings": [
-        {
-          "name": "serviceName",
-          "type": "string",
-          "required": false,
-          "secret": false,
-          "description": "PRAGMATIC_SERVICE_NAME: The service name reported with metrics and traces."
-        },
-        {
-          "name": "otlpEndpoint",
-          "type": "url",
-          "required": false,
-          "secret": false,
-          "description": "PRAGMATIC_OTLP_ENDPOINT: OTLP collector endpoint (no export when unset)."
-        },
-        {
-          "name": "otlpProtocol",
-          "type": "string",
-          "required": false,
-          "secret": false,
-          "default": "http-protobuf",
-          "description": "PRAGMATIC_OTLP_PROTOCOL: OTLP protocol: http-protobuf or grpc."
-        },
-        {
-          "name": "otlpMetrics",
-          "type": "boolean",
-          "required": false,
-          "secret": false,
-          "description": "PRAGMATIC_OTLP_METRICS: Whether metrics are also exported over OTLP."
-        },
-        {
-          "name": "traceSampling",
-          "type": "string",
-          "required": false,
-          "secret": false,
-          "description": "PRAGMATIC_TRACE_SAMPLING: Trace sampling ratio between 0 and 1."
-        }
-      ]
-    },
-    {
       "name": "rateLimit",
       "description": "Request rate limits, each an Rps + Burst pair.",
       "settings": [
@@ -118,14 +76,6 @@
           "secret": false,
           "default": 30000,
           "description": "PRAGMATIC_WS_HEARTBEAT_MS: Heartbeat interval in milliseconds."
-        },
-        {
-          "name": "readIdleMs",
-          "type": "integer",
-          "required": false,
-          "secret": false,
-          "default": 60000,
-          "description": "PRAGMATIC_WS_READ_IDLE_MS: A connection silent for this many milliseconds is closed."
         },
         {
           "name": "backpressureSoftBytes",

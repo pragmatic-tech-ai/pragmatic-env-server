@@ -6,12 +6,12 @@ import type { OptionDescriptor } from '@pragmatic-tech-ai/pragmatic-component'
 import { EnvServerComponent } from '../env-server-component.js'
 import { ComponentGolden } from '../../component/tests/component-golden.js'
 import { ComponentSources } from '../../component/tests/component-sources.js'
+import { EnvServerDescriptorPin } from './env-server-descriptor-pin.js'
 
 class EnvServerComponentFixture
 {
     public static readonly Here = dirname(fileURLToPath(import.meta.url))
     public static readonly Golden = join(EnvServerComponentFixture.Here, 'fixtures', 'pragmatic-env-server.component.json')
-    public static readonly Digest = 'sha256:d2c7d32fea0fb390b680a08984f2fe7354c041fc70470d55d6984ac259151e8d'
     public static readonly Readers = [
         ComponentSources.InPackage('@pragmatic-tech-ai/pragmatic-env-cluster', 'config', 'server-config-loader.js'),
         join(EnvServerComponentFixture.Here, '..', '..', 'storage', 'env-server-database.ts'),
@@ -24,9 +24,10 @@ class EnvServerComponentFixture
     private static readonly TlsWiring = 'platform-owned: machine TLS files the manifests mount'
     private static readonly CloudWiring = 'platform-owned: the cloud provider, its keys and resources, rendered per deployment'
     private static readonly OriginWiring = 'platform-owned: browser origins are per environment, and one configuration is applied to every environment'
-    private static readonly MetricsWiring = 'platform-owned: the metrics port the scrape wiring names'
     private static readonly AuditWiring = 'platform-owned: the access audit records what tenant principals do; its sink is not theirs to turn off'
     private static readonly RetiredAuditFile = 'retired: the shared loader still reads it for the gateway; the env server refuses the file sink (AuditSinkRetiredError)'
+    private static readonly TelemetryWiring = 'platform-owned: the telemetry collector, its export and the service identity belong to the platform (spans carry principal and environment ids)'
+    private static readonly UnusedReadIdle = 'unused: the shared loader reads it for the gateway; the env server hosts close silent sockets by their heartbeat'
     private static readonly PacksWiring = 'not configurable: adapter packs are off without the platform pack cache folder (no hive renders one); the signature check is a trust root'
     private static readonly CloudVariables: readonly string[] = [
         'PRAGMATIC_CLOUD_PROVIDER', 'PRAGMATIC_CLOUD_MASTER_KEY_REF', 'PRAGMATIC_CLOUD_AUDIT_ANCHOR_KEY_REF', 'PRAGMATIC_CLOUD_AUDIT_ANCHOR_INTERVAL',
@@ -36,6 +37,9 @@ class EnvServerComponentFixture
         'PRAGMATIC_RDS_DB', 'PRAGMATIC_RDS_AUTH', 'PRAGMATIC_RDS_PASSWORD_REF',
         'PRAGMATIC_AZURE_STORAGE_ACCOUNT', 'PRAGMATIC_BLOB_CONTAINER', 'PRAGMATIC_BLOB_PREFIX', 'PRAGMATIC_AZURE_KEYVAULT_URL', 'PRAGMATIC_AZPG_HOST',
         'PRAGMATIC_AZPG_PORT', 'PRAGMATIC_AZPG_USER', 'PRAGMATIC_AZPG_DB', 'PRAGMATIC_AZPG_AUTH', 'PRAGMATIC_AZPG_PASSWORD_REF',
+    ]
+    private static readonly TelemetryVariables: readonly string[] = [
+        'PRAGMATIC_SERVICE_NAME', 'PRAGMATIC_METRICS_PORT', 'PRAGMATIC_OTLP_ENDPOINT', 'PRAGMATIC_OTLP_PROTOCOL', 'PRAGMATIC_OTLP_METRICS', 'PRAGMATIC_TRACE_SAMPLING',
     ]
     private static readonly PackVariables: readonly string[] = [
         'PRAGMATIC_ADAPTER_PACKS_DIR', 'PRAGMATIC_ADAPTER_PACKS_REQUIRE_SIGNATURES', 'PRAGMATIC_ADAPTER_PACKS_SANDBOX', 'PRAGMATIC_ADAPTER_PACKS_MAX_OLD_MB',
@@ -70,7 +74,8 @@ class EnvServerComponentFixture
         ['PRAGMATIC_CLIENT_TLS_CA_FILE', EnvServerComponentFixture.TlsWiring],
         ...EnvServerComponentFixture.CloudVariables.map(name => [name, EnvServerComponentFixture.CloudWiring] as [string, string]),
         ['PRAGMATIC_ALLOWED_ORIGINS', EnvServerComponentFixture.OriginWiring],
-        ['PRAGMATIC_METRICS_PORT', EnvServerComponentFixture.MetricsWiring],
+        ...EnvServerComponentFixture.TelemetryVariables.map(name => [name, EnvServerComponentFixture.TelemetryWiring] as [string, string]),
+        ['PRAGMATIC_WS_READ_IDLE_MS', EnvServerComponentFixture.UnusedReadIdle],
         ['PRAGMATIC_AUDIT_SINK', EnvServerComponentFixture.AuditWiring],
         ['PRAGMATIC_AUDIT_FILE', EnvServerComponentFixture.RetiredAuditFile],
         ...EnvServerComponentFixture.PackVariables.map(name => [name, EnvServerComponentFixture.PacksWiring] as [string, string]),
@@ -88,7 +93,7 @@ describe('EnvServerComponent', () =>
 {
     it('pins the descriptor: golden JSON and content digest', () =>
     {
-        ComponentGolden.Check(EnvServerComponent.Descriptor(), EnvServerComponentFixture.Golden, EnvServerComponentFixture.Digest)
+        ComponentGolden.Check(EnvServerComponent.Descriptor(), EnvServerComponentFixture.Golden, EnvServerDescriptorPin.Digest)
     })
 
     it('declares exactly the variables its configuration readers read', () =>
@@ -96,12 +101,12 @@ describe('EnvServerComponent', () =>
         ComponentSources.AssertCovers(EnvServerComponent.Descriptor(), EnvServerComponentFixture.Readers, [...EnvServerComponentFixture.Undeclared.keys()])
     })
 
-    it('declares tuning only: no database, listener, folder, environment, key, cluster, TLS, cloud, origin, metrics port, audit or pack wiring', () =>
+    it('declares tuning only: no database, listener, folder, environment, key, cluster, TLS, cloud, origin, telemetry, audit or pack wiring', () =>
     {
         const descriptor = EnvServerComponent.Descriptor()
-        assert.deepEqual(descriptor.Options.map(o => o.Name), ['core', 'observability', 'rateLimit', 'webSocket', 'paging'])
+        assert.deepEqual(descriptor.Options.map(o => o.Name), ['core', 'rateLimit', 'webSocket', 'paging'])
         assert.deepEqual(EnvServerComponentFixture.Option('core').Settings.map(s => s.Name), ['idleTtlMs', 'idleSweepMs', 'drainTimeoutMs'])
-        assert.equal(EnvServerComponentFixture.Option('observability').Settings.some(s => s.Name === 'metricsPort'), false)
+        assert.equal(EnvServerComponentFixture.Option('webSocket').Settings.some(s => s.Name === 'readIdleMs'), false, 'readIdleMs: unused by the env server')
     })
 
     it('requires no setting and holds no secret: a tenant configuration is optional tuning', () =>
@@ -115,8 +120,14 @@ describe('EnvServerComponent', () =>
     {
         for (const [name, reason] of EnvServerComponentFixture.Undeclared)
         {
-            assert.match(reason, /^(platform-owned|retired|not configurable): /, name)
+            assert.match(reason, /^(platform-owned|retired|unused|not configurable): /, name)
         }
+    })
+
+    it('lists as left out only variables its readers still read', () =>
+    {
+        const read = ComponentSources.ReadBy(EnvServerComponentFixture.Readers)
+        assert.deepEqual([...EnvServerComponentFixture.Undeclared.keys()].filter(name => !read.includes(name)), [])
     })
 
     it('is named for its release image', () =>

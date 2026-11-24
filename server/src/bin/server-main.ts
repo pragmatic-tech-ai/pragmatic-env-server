@@ -8,8 +8,7 @@ import { GracefulShutdown } from './graceful-shutdown.js'
 import { StructuredLogger, type ILogger } from '@pragmatic-tech-ai/pragmatic-observability'
 import { PlatformBundleFactory, type IPlatformBundle } from '../platform/platform-bundle.js'
 import { EnvServerStartImport } from './env-server-start-import.js'
-import { ComponentStartConfiguration } from '@pragmatic-tech-ai/pragmatic-configuration-runtime'
-import { EnvServerComponent } from './env-server-component.js'
+import { EnvServerStartConfiguration } from './env-server-start-configuration.js'
 
 class ServerMain
 {
@@ -35,7 +34,7 @@ class ServerMain
     public static async Run(): Promise<void>
     {
         // First of all: the applied configuration (the mounted pragmatic-config-pragmatic-env-server) over the environment.
-        await ComponentStartConfiguration.ApplyOrExit({ Declaration: EnvServerComponent.Declaration, Env: process.env })
+        await EnvServerStartConfiguration.ApplyOrExit(process.env)
         const logger = StructuredLogger.ToStdout()
         const read = (path: string): string => readFileSync(path, ServerMain.Utf8)
         const config = ServerConfigLoader.Load(process.env, read)

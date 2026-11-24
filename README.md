@@ -19,10 +19,12 @@ Seeded from pragmatic-server@2a2e8138 (dev-kit A3 Task 9); the map is [ARCHITECT
 ## Configuration
 
 The server and the worker read `PRAGMATIC_*` variables (`ServerConfigLoader.Load`). At start, first of all, the mounted
-`pragmatic-config-pragmatic-env-server` (the tenant admin console's applied configuration) is laid over them; one the
-server cannot start with exits 78 with the reason. The tenant may tune only what `server/src/bin/env-server-component.ts`
-declares (idle unloading, drain, WebSocket limits, rate limits, paging, trace export): everything that wires a server to
-its environment or the platform is rendered by the manifests and cannot be configured.
+`pragmatic-config-pragmatic-env-server` (the tenant admin console's applied configuration) is laid over them
+(`EnvServerStartConfiguration`). A configuration the server cannot start with exits 78 with the reason: one that does not
+read, validate or resolve, a timing out of its bound (`EnvServerTuningBounds`), or a value the loader refuses. The tenant
+may tune only what `server/src/bin/env-server-component.ts` declares (idle unloading, drain, WebSocket limits, rate
+limits, paging): everything that wires a server to its environment or the platform is rendered by the manifests and
+cannot be configured.
 
 ## Build and test
 
