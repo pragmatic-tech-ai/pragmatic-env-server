@@ -22,7 +22,7 @@
     "typecheck": "tsc --noEmit && npm run typecheck -w packages/pragmatic-identity-engine-binding && npm run typecheck -w packages/pragmatic-connectors-host"
   },
   "devDependencies": {
-    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.17.7",
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.18.7",
     "@types/node": "^22.20.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0"
@@ -51,6 +51,12 @@
   "pragmaticContainerTemplate": {
     "App": "pragmatic-env-server",
     "Entry": "server/src/bin/pragmatic-serverd.ts",
+    "DockerIgnore": [
+      "docker/postgres-secrets"
+    ],
+    "GitIgnore": [
+      "docker/postgres-secrets/"
+    ],
     "WritableDirs": [
       "node_modules/@pragmatic-tech-ai/todl"
     ]

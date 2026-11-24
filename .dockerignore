@@ -11,3 +11,4 @@ test-results
 docker/master.key
 docker/*.key
 docker/tls
+docker/postgres-secrets
