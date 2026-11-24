@@ -27,7 +27,7 @@ class EnvServerStart
     public static readonly Here = dirname(fileURLToPath(import.meta.url))
     public static readonly ServerMain = join(EnvServerStart.Here, '..', 'server-main.ts')
     public static readonly WorkerMain = join(EnvServerStart.Here, '..', 'worker-main.ts')
-    /** The 0.1.1 descriptor (A5.4), whose image never read its configuration. */
+    /** The 0.1.1 descriptor (A5.4, the d5c3eaf pin), whose image never read its configuration: a fixture, on purpose a literal. */
     public static readonly OldDigest = 'sha256:4ffdd3b2e19fd5a6ad36d651c6906298019c3686782f26104f98e5c2ebff48a8'
     private static readonly FileName = 'configuration.json'
     private static readonly Realm = 'acme'
@@ -211,6 +211,9 @@ describe('the env server reads its configuration at start', () =>
             { webSocket: { heartbeatMs: 3000000000 } },
             { webSocket: { heartbeatMs: 10 } },
             { webSocket: { backpressureGraceMs: 0 } },
+            { webSocket: { maxInboundBytes: EnvServerTuningBounds.LargestInboundBytes + 1 } },
+            { webSocket: { backpressureSoftBytes: 9000000 } },
+            { webSocket: { backpressureSoftBytes: 2000, backpressureHardBytes: 1000 } },
         ]
         for (const options of outOfBound)
         {
@@ -220,10 +223,16 @@ describe('the env server reads its configuration at start', () =>
                 const env = EnvServerStart.Env(await EnvServerStart.Configuration(folder, options))
                 await assert.rejects(EnvServerStartConfiguration.ApplyOrExit(env, exits, EnvServerStart.NoFile))
                 assert.equal(exits.Code, 78, JSON.stringify(options))
-                assert.match(exits.Text, /is out of range: accepted/, JSON.stringify(options))
+                assert.match(exits.Text, /is out of range: accepted|is above webSocket\.backpressureHardBytes/, JSON.stringify(options))
             })
         }
-        assert.deepEqual(EnvServerTuningBounds.Bounded(), ['core.idleTtlMs', 'core.idleSweepMs', 'core.drainTimeoutMs', 'webSocket.heartbeatMs', 'webSocket.backpressureGraceMs'])
+        assert.deepEqual(EnvServerTuningBounds.Bounded(), ['core.idleTtlMs', 'core.idleSweepMs', 'core.drainTimeoutMs', 'webSocket.heartbeatMs', 'webSocket.backpressureGraceMs', 'webSocket.maxInboundBytes'])
+    })
+
+    it('every bounded or paired setting is one the descriptor declares (a rename cannot leave a bound behind)', () =>
+    {
+        const declared = EnvServerComponent.Descriptor().Options.flatMap(o => o.Settings.map(s => o.Name + '.' + s.Name))
+        assert.deepEqual([...EnvServerTuningBounds.Bounded(), ...EnvServerTuningBounds.Paired()].filter(name => !declared.includes(name)), [])
     })
 
     it('the bounds are the edges: the smallest and largest accepted values start', async () =>
@@ -232,7 +241,7 @@ describe('the env server reads its configuration at start', () =>
         {
             const env = EnvServerStart.Env(await EnvServerStart.Configuration(folder, {
                 core: { idleSweepMs: 1000, idleTtlMs: EnvServerTuningBounds.LargestTimerMs, drainTimeoutMs: EnvServerTuningBounds.LongestDrainMs },
-                webSocket: { heartbeatMs: 1000, backpressureGraceMs: 1 },
+                webSocket: { heartbeatMs: 1000, backpressureGraceMs: 1, maxInboundBytes: EnvServerTuningBounds.LargestInboundBytes, backpressureSoftBytes: 8388608 },
             }))
             assert.equal((await EnvServerStartConfiguration.ApplyOrExit(env, new ExitRecorder(), EnvServerStart.NoFile)).Applied, true)
         })
